@@ -16,6 +16,21 @@ APP_NAME = "예산 및 전표관리"
 st.set_page_config(page_title=APP_NAME, page_icon=":material/account_balance_wallet:", layout="wide")
 init_db()
 
+
+@st.cache_resource(show_spinner=False)
+def ensure_demo_data() -> bool:
+    """DB가 비어 있으면(클라우드 첫 실행 등) 예시 데이터를 한 번 만든다."""
+    with connect() as conn:
+        if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            return False
+    from voucher.seed import run
+    run(reset=False)
+    return True
+
+
+with st.spinner("처음 실행이라 예시 데이터를 만드는 중입니다 (약 10~20초)…"):
+    ensure_demo_data()
+
 st.session_state.setdefault("month", month_options()[0])
 
 # ---------- 화면 보기 (로그인 대신) ----------

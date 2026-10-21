@@ -37,6 +37,16 @@ python -m venv .venv
 > 운영 전환 시에는 사내 SSO(`st.login` + OIDC) 등으로 로그인을 붙이고 '화면 보기' 전환은 없애야 한다.
 > `voucher/auth.py` 의 비밀번호 해시·권한 함수는 그대로 쓸 수 있다.
 
+## 인터넷 주소로 띄우기 (Streamlit Community Cloud, 무료)
+
+1. https://share.streamlit.io 에서 GitHub 계정으로 로그인
+2. **Create app** → 저장소 `eriiic1031-maker/budget-voucher`, 브랜치 `main`, 파일 `streamlit_app.py`
+3. **Deploy** → 몇 분 뒤 `https://<이름>.streamlit.app` 주소 생성
+
+- 처음 열 때 예시 데이터가 자동으로 만들어진다 (약 10~20초).
+- 클라우드 저장소는 임시라 앱이 재시작되면 데이터가 처음 상태로 돌아간다.
+- 로그인이 없으므로 **가상 데이터 샘플 용도로만** 쓸 것. 홈택스 엑셀 예시는 `docs/홈택스_매입목록_예시_202610.xlsx`.
+
 ## 총무 예산
 
 - **총무 예산 계정**: 기준정보 > 계정의 `예산 주관`이 `총무`인 계정만 대시보드·부서별 비용·예산 화면에 나온다
