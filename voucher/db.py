@@ -185,6 +185,21 @@ CREATE TABLE IF NOT EXISTS budgets (                -- 월별 예산 (계정 단
     PRIMARY KEY (year, month, gl_account)
 );
 
+CREATE TABLE IF NOT EXISTS attachments (            -- 증빙자료 (전표·연간 항목에 붙인 파일)
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type     TEXT NOT NULL,                -- invoice / annual
+    target_key      TEXT NOT NULL,                -- invoice id / '연간항목id:YYYY-MM'
+    filename        TEXT NOT NULL,
+    content_type    TEXT,
+    size            INTEGER NOT NULL,
+    sha256          TEXT NOT NULL,
+    stored_path     TEXT NOT NULL,
+    note            TEXT,
+    uploaded_by     TEXT,
+    uploaded_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_attach_target ON attachments(target_type, target_key);
+
 CREATE TABLE IF NOT EXISTS ai_log (                -- AI 도우미 기록 (추천 vs 최종 → 정확도, 브리핑 보관)
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     feature         TEXT NOT NULL,                -- account / briefing / qa / docread / anomaly

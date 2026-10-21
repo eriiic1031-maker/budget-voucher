@@ -39,7 +39,7 @@ from .pipeline import ingest_xml, post_invoice, submit_invoice
 from .recurring import mark_checked, recurring_map
 
 NS = "urn:kr:or:kec:standard:Tax:ReusableAggregateBusinessInformationEntitySchemaModule:1:0"
-SEED_VERSION = "4"   # 예시 데이터 구성이 바뀌면 올린다 → 앱이 처음 열릴 때 예시 데이터를 다시 만든다
+SEED_VERSION = "5"   # 예시 데이터 구성이 바뀌면 올린다 → 앱이 처음 열릴 때 예시 데이터를 다시 만든다
 TODAY = date(2026, 10, 21)
 
 DEMO_USERS = [
@@ -386,6 +386,26 @@ def load_no_rule_history(conn) -> None:
         post_invoice(conn, r.invoice_id, actor="admin", proposal=p)
 
 
+def load_demo_attachments(conn) -> None:
+    """예시 증빙자료(docs/demo_attachments)를 전표·연간 항목에 붙인다."""
+    from .attachments import save
+    src = BASE_DIR / "docs" / "demo_attachments"
+    if not src.exists():
+        return
+    targets = [
+        ("invoice", "SELECT id FROM invoices WHERE items_json LIKE '%대회의실 리모델링%'", "견적서_대회의실_리모델링.png",
+         "견적서 (3사 비교 중 최저가)"),
+        ("invoice", "SELECT id FROM invoices WHERE items_json LIKE '%엔진 수리%'", "정비내역서_엔진수리_34다5678.png",
+         "정비 내역서"),
+        ("annual", "SELECT id || ':2026-07' FROM annual_items WHERE name = '재산세(건물분)'",
+         "고지서_재산세_건물분_2026.png", "위택스 납부"),
+    ]
+    for kind, sql, fname, note in targets:
+        row = conn.execute(sql).fetchone()
+        if row and (src / fname).exists():
+            save(conn, kind, row[0], fname, (src / fname).read_bytes(), "admin", note)
+
+
 def hometax_only_invoices() -> list[tuple[str, bytes]]:
     """홈택스에는 있지만 메일로는 오지 않은 세금계산서 (조회 링크만 발송한 공급자 등)."""
     b, _, n = V["hq_rent"]
@@ -493,6 +513,9 @@ def _realistic_timestamps(conn) -> None:
 def run(reset: bool = True) -> None:
     if reset:
         reset_db()
+        import shutil
+        from .attachments import root as attach_root
+        shutil.rmtree(attach_root(), ignore_errors=True)   # 예전 예시 첨부 파일도 정리
     init_db()
     sample_dir = BASE_DIR / "samples"
     sample_dir.mkdir(exist_ok=True)
@@ -545,6 +568,7 @@ def run(reset: bool = True) -> None:
         mark_checked(conn, ids, "admin")
 
         load_annual_history(conn)
+        load_demo_attachments(conn)
         conn.execute("DELETE FROM audit_log WHERE action = 'ANNUAL_DONE'")   # 과거 이력이 '최근 활동'을 덮지 않게
         load_budgets(conn)
         _realistic_timestamps(conn)

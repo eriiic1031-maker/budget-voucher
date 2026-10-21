@@ -5,6 +5,8 @@ import streamlit as st
 
 from voucher.annual import due_items, mark_done, months_of
 from voucher.annual import unmark as unmark_annual
+from voucher.attach_ui import attachment_panel
+from voucher.attachments import counts as attach_counts
 from voucher.budget import invoice_overview
 from voucher.db import connect
 from voucher.recurring import STATUS_LABEL, check_month, mark, mark_checked, unmark, unmark_checked
@@ -22,6 +24,7 @@ with connect() as conn:
     rows = check_month(conn, month)
     ov = invoice_overview(conn, month, owner=None)
     annual = due_items(conn, month)
+    ann_att = attach_counts(conn, "annual")
 nonrec = ov[~ov.recurring.astype(bool)]
 annual_open = sum(a.status != "DONE" for a in annual)
 unchecked = int(nonrec.checked_by.isna().sum())
@@ -139,6 +142,10 @@ if view == "연간 항목":
                             mark_done(conn, a.item_id, month, int(amt), paid.isoformat(), note.strip(), actor)
                         st.toast(f"{a.name} 처리 완료")
                         st.rerun()
+            n_att = ann_att.get(f"{a.item_id}:{month}", 0)
+            with st.expander(f"📎 증빙자료 {n_att}개 (고지서·영수증·점검 결과서)"):
+                attachment_panel("annual", f"{a.item_id}:{month}", actor, key=f"ann_att_{a.item_id}_{month}",
+                                 title="📎 증빙자료")
 
     with st.expander("연간 항목 전체 일정 (1~12월)"):
         with connect() as conn:

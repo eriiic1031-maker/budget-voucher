@@ -5,6 +5,7 @@ import streamlit as st
 
 from voucher.annual import due_items
 from voucher.assist import last_suggestion, log_suggestion, suggest
+from voucher.attach_ui import attachment_panel
 from voucher.classifier import Proposal, ProposedLine, validate
 from voucher.db import audit, connect, now
 from voucher.pipeline import ingest_xml, post_invoice, process, row_to_invoice, submit_invoice
@@ -208,6 +209,15 @@ with st.container(border=True):
         st.error("\n".join(f"- {e}" for e in errs), title="아직 처리할 수 없어요")
     elif not readonly:
         st.success("차변·대변이 맞습니다.", icon=":material/check_circle:")
+
+    # ---------- 증빙자료 ----------
+    st.divider()
+    n_att = attachment_panel("invoice", invoice_id, actor, key=f"att_{invoice_id}",
+                             hint="견적서·계약서·거래명세서·검수 사진 등. 전기 후에도 세금계산서 조회에서 볼 수 있습니다.")
+    if inv.total_amount >= 3_000_000 and n_att == 0:
+        st.warning("300만원 이상 건인데 증빙자료가 없어요. 전기는 할 수 있지만 견적서·품의서를 붙여 두는 것을 권장합니다.",
+                   icon=":material/attach_file:")
+    st.divider()
 
     # ---------- 사용자: 승인 요청 ----------
     if not is_admin:

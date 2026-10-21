@@ -7,6 +7,7 @@ from voucher import ai
 from voucher.annual import due_items, mark_done
 from voucher.anomaly import detect
 from voucher.assist import accuracy
+from voucher.attachments import save as save_attachment
 from voucher.db import connect
 from voucher.docread import match_annual, read
 from voucher.insight import ask, briefing, last_briefing
@@ -110,7 +111,9 @@ elif view == "문서 읽기":
                 m = due.strftime("%Y-%m")
                 with connect() as conn:
                     mark_done(conn, item_id, m, int(amount), due.isoformat(), note, actor)
-                st.success(f"{m} 처리 완료로 저장했습니다. 전표 점검 › 연간 항목과 총무 예산에 반영됩니다.")
+                    if up is not None:   # 읽은 원본 문서를 그 연간 항목의 증빙으로 붙인다
+                        save_attachment(conn, "annual", f"{item_id}:{m}", up.name, up.getvalue(), actor, "문서 읽기로 등록")
+                st.success(f"{m} 처리 완료로 저장하고 원본 문서를 증빙으로 붙였습니다. 전표 점검 › 연간 항목과 총무 예산에 반영됩니다.")
                 st.session_state.pop("doc_result", None)
         if r.text:
             with st.expander("문서에서 읽은 글자"):

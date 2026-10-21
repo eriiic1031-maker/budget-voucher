@@ -57,3 +57,6 @@ borderColor = "#E3E8F0"
 [theme.dark.sidebar]
 backgroundColor = "#0B1017"
 borderColor = "#263142"
+
+[server]
+maxUploadSize = 20   # MB · 증빙자료·엑셀 업로드 한도 (voucher/attachments.py 와 같게)
