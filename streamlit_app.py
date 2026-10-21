@@ -63,7 +63,8 @@ st.session_state.actor = user.user_id
 # ---------- 권한별 메뉴 ----------
 common = [
     st.Page("app_pages/dashboard.py", title="대시보드", icon=":material/space_dashboard:", default=True),
-    *([st.Page("app_pages/budget.py", title="총무 예산", icon=":material/savings:")] if user.is_admin else []),
+    *([st.Page("app_pages/budget.py", title="총무 예산", icon=":material/savings:"),
+       st.Page("app_pages/ai_helper.py", title="AI 도우미", icon=":material/smart_toy:")] if user.is_admin else []),
     st.Page("app_pages/recurring.py", title="전표 점검", icon=":material/event_repeat:"),
     st.Page("app_pages/review.py", title="검토·전기" if user.is_admin else "검토·승인 요청",
             icon=":material/rule:"),
@@ -79,6 +80,7 @@ page = st.navigation({"업무": common, "관리자": admin} if user.is_admin els
 
 with st.sidebar:
     st.selectbox("기준 월", month_options(), key="month")
-    st.caption("샘플 데이터 기준일 2026-10-21 · SAP는 모의 모드")
+    from voucher import ai
+    st.caption(f"샘플 데이터 기준일 2026-10-21 · SAP는 모의 모드 · {ai.status().label}")
 
 page.run()

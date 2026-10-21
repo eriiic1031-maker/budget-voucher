@@ -67,6 +67,7 @@ def process(conn: sqlite3.Connection, invoice_id: int) -> IngestResult:
     row = conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
     inv = row_to_invoice(row)
     proposal = classify(conn, inv)
+    _apply_suggestion(conn, invoice_id, inv, proposal)
     status = "READY" if proposal.auto_post else "REVIEW"
     conn.execute(
         "UPDATE invoices SET status=?, status_reason=?, proposal_json=?, updated_at=? WHERE id=?",
@@ -79,6 +80,25 @@ def process(conn: sqlite3.Connection, invoice_id: int) -> IngestResult:
         ok, msg = post_invoice(conn, invoice_id, actor="auto")
         return IngestResult(invoice_id, "POSTED" if ok else "ERROR", msg)
     return IngestResult(invoice_id, f"NEW_{status}", "\n".join(proposal.issues))
+
+
+def _apply_suggestion(conn: sqlite3.Connection, invoice_id: int, inv: TaxInvoice, proposal: Proposal) -> None:
+    """계정 규칙이 없는 라인은 AI(없으면 과거 비슷한 건) 추천으로 미리 채운다. 확정은 사람이 전기할 때."""
+    missing = [l for l in proposal.lines if not l.gl_account]
+    if not missing:
+        return
+    from .assist import log_suggestion, suggest   # 순환 import 방지
+    text = " ".join(dict.fromkeys(l.item_name for l in missing))
+    s = suggest(conn, inv.supplier_bizno, inv.supplier_name, text, sum(l.amount for l in missing))
+    log_suggestion(conn, invoice_id, s)
+    if not s.gl_account or s.confidence < 0.3:
+        return
+    for l in missing:
+        l.gl_account = s.gl_account
+        if not l.cost_center and s.cost_center:
+            l.cost_center = s.cost_center
+    proposal.issues = [i for i in proposal.issues if "계정 규칙 없음" not in i]
+    proposal.issues.append(f"{s.source_label} 추천으로 계정을 채웠습니다 (신뢰도 {s.confidence:.0%}) — 확인 후 전기하세요")
 
 
 def submit_invoice(conn: sqlite3.Connection, invoice_id: int, proposal: Proposal, actor: str,
@@ -132,4 +152,6 @@ def post_invoice(conn: sqlite3.Connection, invoice_id: int, actor: str,
         (json.dumps(proposal.to_dict(), ensure_ascii=False), now(), invoice_id),
     )
     audit(conn, invoice_id, "POST", {"doc_no": result.doc_no, "messages": result.messages}, actor)
+    from .assist import record_outcome
+    record_outcome(conn, invoice_id, proposal.lines)
     return True, f"SAP 전표 {result.doc_no} ({result.fiscal_year}) 생성"

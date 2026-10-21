@@ -185,6 +185,20 @@ CREATE TABLE IF NOT EXISTS budgets (                -- 월별 예산 (계정 단
     PRIMARY KEY (year, month, gl_account)
 );
 
+CREATE TABLE IF NOT EXISTS ai_log (                -- AI 도우미 기록 (추천 vs 최종 → 정확도, 브리핑 보관)
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature         TEXT NOT NULL,                -- account / briefing / qa / docread / anomaly
+    invoice_id      INTEGER,
+    month           TEXT,
+    source          TEXT NOT NULL,                -- ai(로컬 AI) / history·rule(대체 방식)
+    input_json      TEXT,
+    output_json     TEXT,
+    final_json      TEXT,
+    accepted        INTEGER,                      -- 추천이 그대로 전기됐는가 (1/0)
+    created_at      TEXT NOT NULL,
+    decided_at      TEXT
+);
+
 CREATE TABLE IF NOT EXISTS app_meta (
     key             TEXT PRIMARY KEY,
     value           TEXT

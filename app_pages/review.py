@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from voucher.annual import due_items
+from voucher.assist import last_suggestion, log_suggestion, suggest
 from voucher.classifier import Proposal, ProposedLine, validate
 from voucher.db import audit, connect, now
 from voucher.pipeline import ingest_xml, post_invoice, process, row_to_invoice, submit_invoice
@@ -122,6 +123,39 @@ with st.container(border=True):
                                 "supply_amount": st.column_config.NumberColumn("공급가액", format="localized"),
                                 "tax_amount": st.column_config.NumberColumn("세액", format="localized")})
 
+    with connect() as conn:
+        sug = last_suggestion(conn, invoice_id)
+    if sug and row["status"] != "POSTED":
+        with st.container(border=True):
+            with st.container(horizontal=True, vertical_alignment="center"):
+                src = {"ai": "🤖 로컬 AI 추천", "history": "📚 과거 비슷한 건으로 추천"}.get(sug["source"], "추천 없음")
+                st.markdown(f"**{src}**")
+                if sug.get("gl_account"):
+                    st.badge(f"신뢰도 {sug['confidence']:.0%}",
+                             color="green" if sug["confidence"] >= 0.7 else "orange")
+                st.space("stretch")
+                if is_admin and st.button("다시 추천받기", icon=":material/auto_awesome:", key=f"resug_{invoice_id}",
+                                          help="기준정보를 바꿨거나 로컬 AI를 켠 뒤 다시 추천받습니다."):
+                    with st.spinner("추천하는 중…"):
+                        with connect() as conn:
+                            s = suggest(conn, inv.supplier_bizno, inv.supplier_name,
+                                        " ".join(i.name for i in inv.items), inv.supply_amount)
+                            log_suggestion(conn, invoice_id, s)
+                            if s.gl_account:
+                                for l in proposal.lines:
+                                    l.gl_account = s.gl_account
+                                    l.cost_center = l.cost_center or s.cost_center
+                                conn.execute("UPDATE invoices SET proposal_json=? WHERE id=?",
+                                             (json.dumps(proposal.to_dict(), ensure_ascii=False), invoice_id))
+                    st.session_state[f"ed_ver_{invoice_id}"] = st.session_state.get(f"ed_ver_{invoice_id}", 0) + 1
+                    st.rerun()
+            if sug.get("gl_account"):
+                st.caption(f"{gl_names.get(sug['gl_account'], sug['gl_account'])} · "
+                           f"{cc_names.get(sug.get('cost_center'), '공통 배부(부서 선택 필요)')} — {sug['reason']} "
+                           "· 분개 표에 미리 채웠어요. 맞으면 그대로 전기하세요.")
+            else:
+                st.caption(sug.get("reason", ""))
+
     vendor = st.text_input("SAP 공급업체 코드", value=proposal.sap_vendor or "", key=f"vendor_{invoice_id}",
                            disabled=readonly, help="모르면 비워 두고 요청 메모에 적어 주세요." if not is_admin else None)
 
@@ -129,7 +163,8 @@ with st.container(border=True):
     lines_df = pd.DataFrame([l.__dict__ for l in proposal.lines]) if proposal.lines else pd.DataFrame(
         columns=list(ProposedLine.__dataclass_fields__))
     edited = st.data_editor(
-        lines_df, key=f"lines_{invoice_id}", num_rows="fixed" if readonly else "dynamic", hide_index=True,
+        lines_df, key=f"lines_{invoice_id}_{st.session_state.get(f'ed_ver_{invoice_id}', 0)}",
+        num_rows="fixed" if readonly else "dynamic", hide_index=True,
         disabled=readonly,
         column_order=["item_name", "gl_account", "cost_center", "user_id", "amount", "tax_amount", "tax_code",
                       "text"],

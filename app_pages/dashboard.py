@@ -3,6 +3,7 @@ from datetime import date
 import streamlit as st
 
 from voucher.annual import due_items
+from voucher.anomaly import detect
 from voucher.budget import forecast_month, invoice_overview, yoy_increase
 from voucher.components import month_calendar, task_cards
 from voucher.db import connect
@@ -34,6 +35,7 @@ with connect() as conn:
         ov = invoice_overview(conn, month, owner=None)
         nonrec_open = int((~ov.recurring.astype(bool) & ov.checked_by.isna()).sum())
         annual_open = sum(a.status != "DONE" for a in due_items(conn, month))
+        anomaly_n = len(detect(conn, month))
 pending_all = all_inv[all_inv.status.isin(["REVIEW", "SUBMITTED", "READY", "ERROR"])]
 
 if not user.is_admin:   # 사용자는 우리 부서 기준
@@ -50,6 +52,7 @@ CARD_TARGET = {
     "rec": ("app_pages/recurring.py", "check_view", "정기 전표"),
     "nonrec": ("app_pages/recurring.py", "check_view", "비정기 전표"),
     "annual": ("app_pages/recurring.py", "check_view", "연간 항목"),
+    "anomaly": ("app_pages/ai_helper.py", "ai_view", "이상 신호"),
 }
 
 # ---------- 오늘 할 일 ----------
@@ -71,6 +74,8 @@ if user.is_admin:
          "count": nonrec_open, "desc": "금액·용도·부서를 눈으로 확인할 건"},
         {"id": "annual", "icon": "🗓️", "title": "연간 항목", "tone": "violet", "go": "체크하러 가기",
          "count": annual_open, "desc": "이번 달 처리할 세금·보험·점검 (재산세 등)"},
+        {"id": "anomaly", "icon": "🚨", "title": "이상 신호", "tone": "orange", "go": "확인하러 가기",
+         "count": anomaly_n, "desc": "중복·분할 의심, 금액 급증, 신규 고액 거래"},
     ]
 else:
     cards = [

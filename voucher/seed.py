@@ -39,7 +39,7 @@ from .pipeline import ingest_xml, post_invoice, submit_invoice
 from .recurring import mark_checked, recurring_map
 
 NS = "urn:kr:or:kec:standard:Tax:ReusableAggregateBusinessInformationEntitySchemaModule:1:0"
-SEED_VERSION = "3"   # 예시 데이터 구성이 바뀌면 올린다 → 앱이 처음 열릴 때 예시 데이터를 다시 만든다
+SEED_VERSION = "4"   # 예시 데이터 구성이 바뀌면 올린다 → 앱이 처음 열릴 때 예시 데이터를 다시 만든다
 TODAY = date(2026, 10, 21)
 
 DEMO_USERS = [
@@ -334,6 +334,10 @@ def month_invoices(y: int, m: int, rnd: random.Random, cutoff: int | None = None
         add("repair", 14, [("하계 공조기 점검", "", 6_500_000)])
     if (y, m) == (2026, 10):  # 이번 달 일부러 넣은 상황
         add("repair", 16, [("대회의실 리모델링", "1차 기성", 38_000_000)])
+        add("stationery", 6, [("토너·잉크", "복합기용", 1_800_000)])      # 중복 의심 (같은 금액 8일 뒤)
+        add("stationery", 14, [("토너·잉크", "복합기용", 1_800_000)])
+        for d in (13, 14, 15):                                            # 분할 의심 (3일 동안 3건, 합계 330만원)
+            add("print", d, [("홍보 브로슈어 인쇄", f"{d - 12}차", 1_000_000)])
         add("carfix", 18, [("엔진 수리 34다5678", "", 6_800_000)])
         out = [o for o in out if not (o["vendor"] == "copier")]
         add("copier", 10, [("복합기 렌탈료", mm, 9_270_000), ("초과 출력 요금", mm, 2_150_000)])
@@ -346,6 +350,40 @@ def all_invoices() -> list[dict]:
     for y, m in [(2025, mm) for mm in range(1, 13)] + [(2026, mm) for mm in range(1, 11)]:
         out += month_invoices(y, m, rnd, cutoff=TODAY.day if (y, m) == (TODAY.year, TODAY.month) else None)
     return out
+
+
+# 규칙이 없는 거래처 — 들어오면 '과거 비슷한 건'으로 계정·부서를 추천하고, 담당자가 확정(가끔 수정)한다
+# (발행일, 사업자번호, 공급자, 품목, 공급가, 담당자가 확정한 계정, 부서)
+NO_RULE_HISTORY = [
+    ("2025-11-20", "2118100098", "새봄문구", "탁상 달력 제작", 1_700_000, "83000000", "K1200"),
+    ("2026-01-14", "1308100301", "모아철물", "공구·철물 소모품", 420_000, "83000000", "K1200"),
+    ("2026-02-11", "1308100302", "하늘꽃집", "경조 화환", 300_000, "81100000", "K1100"),
+    ("2026-02-25", "1308100301", "모아철물", "철물 소모품(나사·앵커)", 260_000, "83000000", "K1200"),
+    ("2026-03-18", "1308100303", "커피로스터리 온", "회의용 원두", 540_000, "81100000", "K1200"),
+    ("2026-04-08", "1308100302", "하늘꽃집", "개업 축하 화환", 350_000, "81100000", "K1100"),
+    ("2026-04-22", "1308100303", "커피로스터리 온", "탕비실 원두", 610_000, "81100000", "K1200"),
+    ("2026-05-12", "1308100301", "모아철물", "공구 소모품", 380_000, "83000000", "K1200"),
+    ("2026-05-28", "1308100304", "바른열쇠", "출입문 도어락 교체", 1_250_000, "82000000", "K1200"),   # 첫 거래 → 추천 없음
+    ("2026-06-16", "1308100302", "하늘꽃집", "조문 화환", 300_000, "81100000", "K1100"),
+    ("2026-07-07", "1308100303", "커피로스터리 온", "회의용 원두", 580_000, "81100000", "K1200"),
+    ("2026-07-21", "1308100304", "바른열쇠", "사무실 열쇠 복사", 90_000, "83000000", "K1200"),       # 과거와 달라 수정됨
+    ("2026-08-19", "1308100301", "모아철물", "공구·철물 소모품", 450_000, "83000000", "K1200"),
+    ("2026-09-08", "1308100302", "하늘꽃집", "경조 화환", 300_000, "81100000", "K1100"),
+    ("2026-09-23", "1308100303", "커피로스터리 온", "행사용 원두·컵", 720_000, "81100000", "K2100"),   # 부서가 달라 수정됨
+]
+
+
+def load_no_rule_history(conn) -> None:
+    """규칙 없는 거래처 세금계산서 → (추천 기록) → 담당자 확정 전기. 추천 정확도 화면의 예시."""
+    for d, bizno, name, item, amt, gl, cc in NO_RULE_HISTORY:
+        day = date.fromisoformat(d)
+        r = ingest_xml(conn, build_xml(_approval(day), day, (bizno, name), [(item, "", amt)]), "mail")
+        row = conn.execute("SELECT proposal_json FROM invoices WHERE id=?", (r.invoice_id,)).fetchone()
+        p = Proposal.from_dict(json.loads(row["proposal_json"]))
+        p.sap_vendor = "3" + bizno[-5:]
+        for line in p.lines:
+            line.gl_account, line.cost_center = gl, cc
+        post_invoice(conn, r.invoice_id, actor="admin", proposal=p)
 
 
 def hometax_only_invoices() -> list[tuple[str, bytes]]:
@@ -461,6 +499,8 @@ def run(reset: bool = True) -> None:
     for old in sample_dir.glob("*.xml"):
         old.unlink()
 
+    from . import ai
+    ai.disable(True)            # 예시 데이터는 빠르고 늘 같게 — 추천은 '과거 비슷한 건' 방식으로
     invs = all_invoices()
     names = {k: (b, n) for k, (b, _, n) in V.items()}
     oct_xmls: list[bytes] = []
@@ -479,6 +519,8 @@ def run(reset: bool = True) -> None:
             # 이번 달 19일 이후 건은 아직 '전기 대기'로 남겨 둔다
             if r.invoice_id and r.status in ("NEW_READY", "NEW_REVIEW") and not (recent and d.day >= 19):
                 post_invoice(conn, r.invoice_id, actor="auto" if r.status == "NEW_READY" else "admin")
+
+        load_no_rule_history(conn)
 
         # ---- 이번 달 검토가 필요한 상황 ----
         extra = [
@@ -511,6 +553,7 @@ def run(reset: bool = True) -> None:
         n = conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0]
         y25 = conn.execute("SELECT SUM(supply_amount) FROM invoices WHERE issue_date LIKE '2025%'").fetchone()[0]
 
+    ai.disable(False)
     write_hometax_excel_sample(oct_xmls + [x for _, x in hometax_only_invoices()],
                                sample_dir / "홈택스_매입목록_예시_202610.xlsx")
     print(f"예시 데이터 생성 완료 · 세금계산서 {n:,}건 · 2025년 공급가액 합계 {y25 / 1e8:,.1f}억원")
