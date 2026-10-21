@@ -122,16 +122,13 @@ if user.is_admin:
     if yoy.empty:
         st.success("작년 같은 기간보다 늘어난 계정이 없어요.")
     else:
-        st.dataframe(
-            yoy, hide_index=True, alt="작년 대비 늘어난 비용과 원인",
-            column_config={
-                "올해": st.column_config.NumberColumn(format="localized"),
-                "작년": st.column_config.NumberColumn(format="localized"),
-                "증가": st.column_config.NumberColumn("증가액", format="localized"),
-                "증가율": st.column_config.NumberColumn(format="percent"),
-                "원인": st.column_config.TextColumn("무엇 때문에 늘었나", width="large"),
-            },
-        )
+        view = yoy.assign(
+            올해=yoy["올해"].map(short_won), 작년=yoy["작년"].map(short_won),
+            증가=yoy.apply(lambda r: f"+{short_won(r['증가'])}"
+                          + (f" ({r['증가율']:+.0%})" if r["증가율"] == r["증가율"] and r["증가율"] is not None else " (신규)"),
+                          axis=1),
+        ).rename(columns={"원인": "무엇 때문에 늘었나"}).drop(columns=["증가율"])
+        st.table(view, hide_index=True, alt="작년 대비 늘어난 비용과 원인")   # 원인 문장이 길어도 줄바꿈되도록 표로
 
     with st.expander("📅 이번 달 달력 — 정기 전표 기한 · 연간 항목 · 작년 이 시기 지출 · 세무 일정", expanded=True):
         with connect() as conn:
