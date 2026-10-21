@@ -1,0 +1,443 @@
+"""포트폴리오용 사용 가이드 (docs/예산및전표관리_사용가이드.docx).
+
+'자산관리 AI 사용 가이드'와 같은 형식: 제목 → 날짜·작성자 → 소개 → 시작하기 → 단계별 사용법(그림 + ①② 설명)
+→ 역할별 화면 → 설정 → 알아두기(문제 해결·유의할 점·규모와 품질·기술 구성).
+화면 그림은 docs/images/*.png (빨간 박스·번호 표시된 캡처).
+    .venv\\Scripts\\python docs\\build_usage_guide.py
+"""
+import re
+from pathlib import Path
+
+from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt, RGBColor
+from PIL import Image
+
+HERE = Path(__file__).parent
+IMG = HERE / "images"
+OUT = HERE / "예산및전표관리_사용가이드.docx"
+URL = "https://budget-voucher.streamlit.app"
+EAST, LATIN = "맑은 고딕", "Calibri"
+CIRCLED = "①②③④⑤⑥⑦⑧⑨"
+
+doc = Document()
+sec = doc.sections[0]
+sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
+for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+    setattr(sec, side, Cm(2.5))
+CONTENT_W = Cm(16.0)
+
+
+def fonts(target, size=None, bold=None, color=None):
+    f = target.font
+    f.name = LATIN
+    rpr = target.element.get_or_add_rPr()
+    rf = rpr.find(qn("w:rFonts"))
+    if rf is None:
+        rf = OxmlElement("w:rFonts")
+        rpr.append(rf)
+    rf.set(qn("w:ascii"), LATIN)
+    rf.set(qn("w:hAnsi"), LATIN)
+    rf.set(qn("w:eastAsia"), EAST)
+    if size:
+        f.size = Pt(size)
+    if bold is not None:
+        f.bold = bold
+    if color:
+        f.color.rgb = RGBColor.from_string(color)
+
+
+fonts(doc.styles["Normal"], size=11)
+doc.styles["Normal"].paragraph_format.space_after = Pt(10)
+doc.styles["Normal"].paragraph_format.line_spacing = 1.3
+fonts(doc.styles["Title"], size=28, bold=True, color="000000")
+fonts(doc.styles["Heading 2"], size=13, bold=True, color="2E74B5")
+fonts(doc.styles["Heading 3"], size=12, bold=True, color="1F4D78")
+for st in ("Heading 2", "Heading 3"):
+    doc.styles[st].paragraph_format.space_before = Pt(18)
+    doc.styles[st].paragraph_format.space_after = Pt(8)
+# Title 스타일의 밑줄 테두리 제거 (참고 문서처럼 깔끔하게)
+tpr = doc.styles["Title"].element.get_or_add_pPr()
+for b in tpr.findall(qn("w:pBdr")):
+    tpr.remove(b)
+
+# 쪽 번호
+fp = sec.footer.paragraphs[0]
+fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+r = fp.add_run()
+for tag, txt in (("begin", None), (None, "PAGE"), ("end", None)):
+    el = OxmlElement("w:fldChar" if tag else "w:instrText")
+    if tag:
+        el.set(qn("w:fldCharType"), tag)
+    else:
+        el.set(qn("xml:space"), "preserve")
+        el.text = txt
+    r._r.append(el)
+fonts(r, size=9, color="808080")
+
+EMOJI = re.compile("([\U0001F300-\U0001FAFF☀-➿⭐✅☑][️]?)")
+
+
+def rich(p, text, size=None, color=None):
+    """**굵게** 지원, 이모지는 Segoe UI Emoji."""
+    for i, part in enumerate(text.split("**")):
+        for seg in EMOJI.split(part):
+            if not seg:
+                continue
+            run = p.add_run(seg)
+            fonts(run, size=size, bold=(i % 2 == 1) or None, color=color)
+            if EMOJI.fullmatch(seg):
+                rf = run.element.rPr.rFonts
+                for k in ("w:ascii", "w:hAnsi", "w:eastAsia"):
+                    rf.set(qn(k), "Segoe UI Emoji")
+    return p
+
+
+def para(text, **kw):
+    return rich(doc.add_paragraph(), text, **kw)
+
+
+def link(p, text, url):
+    """파란 밑줄 하이퍼링크 (참고 문서처럼 서비스 주소를 바로 누를 수 있게)."""
+    r_id = p.part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+                            is_external=True)
+    h = OxmlElement("w:hyperlink")
+    h.set(qn("r:id"), r_id)
+    run = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    for tag, attrs in (("w:color", {"w:val": "0563C1"}), ("w:u", {"w:val": "single"})):
+        el = OxmlElement(tag)
+        for k, v in attrs.items():
+            el.set(qn(k), v)
+        rpr.append(el)
+    run.append(rpr)
+    t = OxmlElement("w:t")
+    t.text = text
+    run.append(t)
+    h.append(run)
+    p._p.append(h)
+
+
+def lead(title, text):
+    """참고 문서의 '**처음 열 때 알아둘 점.** 설명' 형식."""
+    return para(f"**{title}** {text}")
+
+
+def h2(text):
+    doc.add_heading(text, level=2)
+
+
+def h3(text):
+    doc.add_heading(text, level=3)
+
+
+def bullets(items):
+    for it in items:
+        p = doc.add_paragraph(style="List Bullet")
+        rich(p, it)
+        p.paragraph_format.space_after = Pt(4)
+
+
+def numbered(items):
+    for it in items:
+        p = doc.add_paragraph(style="List Number")
+        rich(p, it)
+        p.paragraph_format.space_after = Pt(4)
+
+
+_fig = [0]
+
+
+def figure(file, title, marks):
+    """그림 + '그림 N. 제목 ① … ② …' 캡션 (참고 문서 형식)."""
+    _fig[0] += 1
+    w, h = Image.open(IMG / file).size
+    max_h = Cm(12.5)
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.keep_with_next = True
+    run = p.add_run()
+    if CONTENT_W * h / w > max_h:
+        run.add_picture(str(IMG / file), height=max_h)
+    else:
+        run.add_picture(str(IMG / file), width=CONTENT_W)
+    cap = doc.add_paragraph()
+    rich(cap, f"**그림 {_fig[0]}. {title}** " + " ".join(f"{CIRCLED[i]} {m}" for i, m in enumerate(marks)))
+
+
+def table(headers, rows, widths):
+    t = doc.add_table(rows=1, cols=len(headers))
+    t.style = "Table Grid"
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    t.autofit = False
+    for i, h in enumerate(headers):
+        c = t.rows[0].cells[i]
+        c.text = ""
+        rich(c.paragraphs[0], f"**{h}**", size=10)
+        tcpr = c._tc.get_or_add_tcPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), "F2F2F2")
+        tcpr.append(shd)
+    for row in rows:
+        cells = t.add_row().cells
+        for i, v in enumerate(row):
+            cells[i].text = ""
+            rich(cells[i].paragraphs[0], v, size=10)
+    for row in t.rows:
+        for i, wd in enumerate(widths):
+            row.cells[i].width = Cm(wd)
+            for p in row.cells[i].paragraphs:
+                p.paragraph_format.space_after = Pt(2)
+                p.paragraph_format.line_spacing = 1.15
+    doc.add_paragraph().paragraph_format.space_after = Pt(0)
+
+
+# =================================================================== 표지 ====
+doc.add_paragraph("예산 및 전표관리 사용 가이드", style="Title")
+para("Oct 21, 2026 · @재열", size=10)
+para("메일·홈택스로 받은 전자세금계산서를 읽어 계정·부서·사용자별로 **자동 분개**하고 SAP 전표를 만든 뒤, "
+     "**정기·비정기 전표 점검**과 **총무 예산 대비 초과(예상) 경고와 그 이유**까지 한곳에서 보는 총무용 웹 프로그램의 "
+     "사용법입니다. 본문의 업체·사람·금액은 모두 설명용 예시입니다.")
+
+# ================================================================ 시작하기 ====
+h2("시작하기")
+p = doc.add_paragraph()
+rich(p, "주소창에 서비스 주소(")
+link(p, URL, URL)
+rich(p, ")를 열면 바로 사용할 수 있고, 로그인과 회원가입은 없습니다.")
+lead("처음 열 때 알아둘 점.", "무료 서버를 쓰기 때문에 한동안 아무도 쓰지 않으면 잠들고, 다시 열면 깨어나면서 "
+     "예시 데이터(세금계산서 1,695건, 22개월치)를 만드느라 10~20초 걸립니다. 데모의 데이터는 마음껏 전기·확인해도 되며, "
+     "서버가 다시 시작되면 처음 상태로 돌아갑니다.")
+lead("누구로 쓸지 고르기.", "왼쪽 사이드바 **화면 보기**에서 사람을 고르면 그 사람의 권한으로 화면이 바뀝니다. "
+     "처음에는 **총무 담당자 · 관리자**로 열립니다. 바로 아래 **기준 월**로 보고 싶은 달을 고릅니다(기본 2026-10).")
+figure("01_dashboard.png", "대시보드(총무 담당자)", [
+    "화면 보기 — 총무 담당자(관리자)·홍길동·김철수(사용자) 전환.",
+    "기준 월.",
+    "오늘 할 일 카드 — 카드 아무 곳이나 누르면 그 일을 처리하는 화면으로 바로 이동합니다.",
+    "총무 예산 경고 — 예산을 넘었거나 넘을 것으로 보이는 계정과 그 이유.",
+])
+lead("화면 구성.", "")
+bullets([
+    "**왼쪽 메뉴**: 권한에 따라 다릅니다(관리자 9개, 사용자 5개). 업무(대시보드·총무 예산·전표 점검·검토·전기·부서별 비용·"
+    "세금계산서 조회)와 관리자(홈택스 대사·기준정보·사용자 관리)로 나뉩니다.",
+    "**오른쪽 작업 영역**: 위에 숫자 카드, 아래에 목록과 처리 버튼. 목록의 줄을 체크하면 그 건의 처리 화면이 아래에 열립니다.",
+    "**SAP 연결**: 데모는 모의 모드라 전표번호만 만들고 실제 SAP에는 아무것도 보내지 않습니다.",
+])
+lead("권장 순서.", "오늘 할 일 확인 → 총무 예산 경고 → 작년 대비·달력 → 전표 점검(정기·비정기·연간) → 검토·전기 → "
+     "홈택스 대사 → 다른 사람 화면으로 바꿔 보기.")
+
+# ============================================================== 1단계 ====
+h2("1단계. 오늘 할 일 확인하고 바로 처리")
+para("대시보드 맨 위 **오늘 할 일** 카드에 처리할 일이 종류별 건수로 나옵니다. 카드를 누르면 그 일을 처리하는 화면이 "
+     "**해당 구분이 선택된 채** 열립니다.")
+table(["카드", "누르면 열리는 화면", "하는 일"], [
+    ("🙋 승인 요청", "검토·전기 › 승인 요청", "사용자가 고친 분개를 확인하고 SAP 전기 또는 반려"),
+    ("📝 검토 대기", "검토·전기 › 검토 대기", "자동 분류가 확신하지 못한 건의 계정·부서·거래처 확정"),
+    ("📤 전기 대기", "검토·전기 › 전기 대기", "분류가 끝난 건을 한 번에 일괄 전기"),
+    ("⚠️ 예산 경고", "총무 예산", "초과·초과 예상 계정과 이유 확인"),
+    ("🔁 정기 전표 확인", "전표 점검 › 정기 전표", "기한 경과·금액 상이·미전기 정기 전표 처리"),
+    ("🔎 비정기 미확인", "전표 점검 › 비정기 전표", "금액·용도·부서를 보고 확인 완료"),
+    ("🗓️ 연간 항목", "전표 점검 › 연간 항목", "재산세·자동차세·보험 갱신 등 이번 달 처리분 체크"),
+], widths=[3.4, 4.6, 8.0])
+
+# ============================================================== 2단계 ====
+h2("2단계. 총무 예산 — 초과 경고와 그 이유")
+para("📊 **총무 예산**(관리자)에서 이번 달 예산 대비 사용액과 **월말 예상**을 봅니다. 예산 주관이 '총무'인 계정만 "
+     "집계하므로 운반비·광고비 같은 다른 부서 예산은 섞이지 않습니다.")
+figure("02_budget_month.png", "총무 예산 › 이번 달", [
+    "보기 전환(이번 달·연간 누적·예산 입력).",
+    "이번 달 예산·사용·월말 예상·초과/초과 예상 건수.",
+    "예산 경고 — '왜 그런가요?' 아래에 초과(예상) 이유가 문장으로 나옵니다.",
+])
+table(["경고", "기준"], [
+    ("🔴 초과", "이미 쓴 금액이 예산보다 큼"),
+    ("🟠 초과 예상", "월말 예상이 예산의 102%를 넘음"),
+    ("🟡 주의", "월말 예상이 예산의 98~102%"),
+], widths=[4.0, 12.0])
+lead("월말 예상은 이렇게 계산합니다.", "받은 정기 전표 + 아직 안 받은 정기 전표(작년 같은 달 금액에 올해 단가 비율을 곱해 "
+     "계절성 반영) + 처리 전 연간 항목 + 큰 비정기 지출(한 번만) + 나머지 비정기 지출의 남은 기간 추정"
+     "(월초엔 작년 패턴, 월말로 갈수록 이번 달 속도를 더 믿음).")
+lead("이유 문장 예시.", "")
+bullets([
+    "수선비: 큰 비정기 지출 튼튼설비(주) '대회의실 리모델링' **3,800만원** (예산의 422%).",
+    "차량유지비: 비정기 지출 속도가 작년 같은 달보다 **40% 빠릅니다** · 엔진 수리 748만원.",
+    "복리후생비: 아직 안 들어온 정기 전표 **구내식당 위탁** 1억 4,995만원 예정 + 창립기념 행사 1,500만원.",
+    "수도광열비: 정기 전표(전기·가스요금)가 작년 같은 달보다 **6% 늘었습니다** — 요금 인상 확인.",
+])
+figure("03_budget_input.png", "총무 예산 › 예산 입력", [
+    "연도.",
+    "계정 × 12개월 예산 표 — 칸을 고쳐 입력합니다.",
+    "저장 / '작년 실적 × 1.05로 채우기'.",
+])
+para("데모의 2026년 예산은 2025년 같은 달 실적 × 1.05, 2025년 예산은 2026년 예산 ÷ 1.05입니다. "
+     "기준 월을 2025년으로 바꾸면 작년 예산 대비 실적도 같은 화면에서 봅니다.")
+
+# ============================================================== 3단계 ====
+h2("3단계. 작년보다 늘어난 비용 · 달력")
+para("대시보드를 아래로 내리면 **작년 같은 기간(같은 날짜까지)**과 비교해 늘어난 계정과 원인이 나옵니다.")
+figure("13_yoy.png", "작년보다 늘어난 비용", [
+    "비교 기간(이번 달 · 올해 누적).",
+    "계정별 증가액과 '무엇 때문에 늘었나' — 정기 전표·공급자·연간 항목 단위로, 비정기는 가장 큰 품목까지 보여 줍니다.",
+])
+bullets([
+    "새 계약은 '신규'로 표시됩니다(예: 사내 피트니스 제휴 신규, 보안관제 서비스 신규).",
+    "계약 변경·단가 인상은 '작년 → 올해' 금액으로 보입니다(예: 본사 정기주차 450만원 → 600만원).",
+])
+figure("14_calendar.png", "이번 달 달력(28일 선택)", [
+    "제목 줄을 누르면 접히고 다시 누르면 펼쳐집니다.",
+    "색 구분 — 정기 전표 기한·연간 항목·작년 이 시기 지출·세무·마감 일정·공휴일.",
+    "날짜를 누르면 선택(오늘은 파란 동그라미).",
+    "그날 일정 — 상태(✅ 완료 ⏳ 대기 🔴 지연)와 예상 금액.",
+    "다음 달 연간 항목 미리 보기.",
+])
+para("부가세 신고 마감(1·4·7·10월 25일, 주말이면 다음 영업일), 전월분 홈택스 대사 권장일(10일), 월말 결산 마감(마지막 영업일)이 "
+     "자동으로 표시되고, **작년 이 시기 지출**로 '작년 이맘때 나간 큰 비용'을 미리 확인할 수 있습니다.")
+
+# ============================================================== 4단계 ====
+h2("4단계. 전표 점검 — 정기 · 비정기 · 연간 항목")
+para("🔁 **전표 점검**은 세 가지를 나눠 봅니다. 위쪽 구분 버튼에 확인이 필요한 건수가 함께 나옵니다.")
+figure("04_recurring.png", "전표 점검 › 정기 전표(복합기 렌탈료 선택)", [
+    "구분(정기 전표 · 비정기 전표 · 연간 항목).",
+    "완료·기한 경과·금액 상이·수신·미전기·수신 대기 건수.",
+    "정기 전표 목록 — 왼쪽 체크로 한 건을 고릅니다.",
+    "확인 처리 — '확인 완료' 또는 '이번 달 해당 없음' + 메모(필수).",
+])
+table(["상태", "뜻", "할 일"], [
+    ("✅ 전기 완료", "기한 안에 들어와 SAP에 전기됨, 금액 정상", "—"),
+    ("🟠 금액 상이", "예상 금액과 허용 범위 이상 차이", "사유 확인 후 확인 완료"),
+    ("🟡 수신·미전기", "세금계산서는 받았지만 전기 전", "검토·전기에서 전기"),
+    ("⏳ 수신 대기", "기한 전, 아직 안 들어옴", "—"),
+    ("🔴 기한 경과", "기한이 지났는데 안 들어옴", "공급자에 발행 요청 / 홈택스 대사로 확인"),
+], widths=[3.2, 6.4, 6.4])
+figure("05_nonrecurring.png", "전표 점검 › 비정기 전표(3건 선택)", [
+    "비정기 건수·미확인·큰 금액(300만원↑)·신규 거래처.",
+    "필터 — 미확인만 보기, 총무 예산만, 큰 금액·신규 거래처 강조.",
+    "목록 — 💰 큰 금액, 🆕 최근 3개월 신규 거래처. 여러 줄을 체크합니다.",
+    "확인 메모와 'N건 확인 완료' — 한 번에 확인합니다.",
+])
+figure("15_annual.png", "전표 점검 › 연간 항목", [
+    "연간 항목 · 미처리 건수.",
+    "이번 달 처리할 항목 — 처리 금액·처리일·메모를 넣고 '처리 완료'.",
+    "1~12월 전체 일정 — 재산세(7·9월), 자동차세(6·12월), 주민세(8월), 보험 갱신, 법정 점검 등.",
+])
+para("세금계산서가 오지 않는 세금·보험·점검 비용도 여기서 체크하면 총무 예산 실적에 들어가고, 처리 전에는 예상 금액이 "
+     "월말 예상에 들어갑니다. 검토·전기 화면 위에도 이번 달 미처리 연간 항목이 안내됩니다.")
+
+# ============================================================== 5단계 ====
+h2("5단계. 검토 · 승인 요청 · SAP 전기")
+para("세금계산서가 들어오면 공급자·품목 규칙과 차량번호·배부 기준으로 계정·부서·사용자를 자동으로 나눕니다. "
+     "확신하지 못한 건만 사람이 봅니다.")
+table(["단계", "누가", "무엇을", "버튼"], [
+    ("1. 자동 분류", "프로그램", "공급자·키워드 규칙 → 계정, 차량번호 → 부서·사용자, 배부 기준 → 비율 분할", "—"),
+    ("2. 검토", "사용자·관리자", "규칙이 없는 건의 계정·부서 채우기", "관리자에게 승인 요청"),
+    ("3. 승인", "관리자", "요청 메모 확인, SAP 공급업체 코드 입력", "SAP 전기 · 반려"),
+    ("4. 전기", "관리자", "분류가 끝난 건 한 번에", "N건 일괄 전기"),
+], widths=[2.6, 2.6, 7.2, 3.6])
+figure("07_user_review.png", "검토·승인 요청(사용자 홍길동)", [
+    "확인이 필요한 이유(미등록 공급업체·계정 규칙 없음).",
+    "차변 분개 표 — 계정·부서를 고르고, 행을 추가하면 부서·사용자별로 나눌 수 있습니다.",
+    "요청 메모와 '관리자에게 승인 요청'(SAP 공급업체 코드는 몰라도 됩니다).",
+])
+figure("08_admin_review.png", "검토·전기 › 승인 요청(관리자)", [
+    "구분(승인 요청 · 검토 대기 · 전기 대기).",
+    "요청한 사람의 메모.",
+    "SAP 공급업체 코드 — 처음 보는 거래처면 입력하고 마스터에 저장.",
+    "SAP 전기 · 반려 · 재분류 · 전기 제외.",
+])
+lead("분개 규칙.", "(차) 비용계정(부서·사용자별) + 부가세대급금 / (대) 공급업체. 비영업용 승용차 비용은 부가세 불공제로 "
+     "비용에 포함하고, 수정세금계산서(마이너스)는 대변메모 전표로 만듭니다. '공급자 규칙으로 저장'을 체크하고 전기하면 "
+     "다음부터 같은 공급자는 자동 분류됩니다.")
+
+# ============================================================== 6단계 ====
+h2("6단계. 홈택스 대사 (메일로 안 온 세금계산서 찾기)")
+para("공급자가 메일을 안 보내거나 조회 링크만 보내면 놓치는 세금계산서를, 홈택스 기준 목록과 승인번호로 맞춰 찾아 "
+     "자동 등록합니다. 유료 API 없이 **홈택스에서 내려받은 엑셀**을 그대로 올리면 됩니다.")
+figure("09_hometax.png", "홈택스 대사 › 엑셀 올리기", [
+    "홈택스 엑셀 올리기(무료) 탭 — 유료 API 자동 수집 탭도 있습니다.",
+    "홈택스 '목록조회 → 매입 → 엑셀내려받기' 파일을 그대로 올리기.",
+    "결과 — 시스템에 없던 2건(10월 본사 임차료 등)을 자동 등록.",
+    "대사 결과 — 일치·시스템 미수집·금액 불일치·홈택스 미확인.",
+])
+table(["대사 결과", "뜻", "조치"], [
+    ("✅ 일치", "홈택스와 시스템 모두 있음, 금액 같음", "—"),
+    ("🔴 시스템 미수집", "홈택스에만 있음(메일 미수신)", "가져오기 때 자동 등록 → 검토·전기"),
+    ("🟠 금액 불일치", "승인번호는 같은데 금액이 다름", "원본 확인"),
+    ("🟡 홈택스 미확인", "시스템에만 있음", "수집 기간·취소 여부 확인"),
+], widths=[3.4, 6.3, 6.3])
+para("홈택스 화면 개편으로 엑셀 컬럼 순서가 바뀌어도 컬럼 **이름**으로 찾아 읽고, 확장자만 .xls인 HTML 표도 처리합니다.")
+
+# ============================================================== 7단계 ====
+h2("7단계. 부서별 비용 · 세금계산서 조회")
+figure("10_dept_costs.png", "부서별 비용(영업1팀)", [
+    "부서 선택(사용자는 자기 부서만).",
+    "이번 달 비용·건수·가장 큰 항목, 전월 대비.",
+    "계정별·사용자별(차량 담당자) 비용.",
+])
+figure("11_invoices.png", "세금계산서 조회", [
+    "월별 전체 목록 — 행을 고르면 오른쪽에 상세.",
+    "SAP 전표 내용(BAPI_ACC_DOCUMENT_POST 형식: 공급업체·비용·부가세 라인)과 처리 이력.",
+])
+
+# ============================================================ 역할별 화면 ====
+h2("역할별 화면")
+para("같은 프로그램이라도 '화면 보기'로 고른 사람의 권한에 따라 메뉴와 버튼이 달라집니다.")
+table(["역할", "데모 사용자", "주로 하는 일", "메뉴"], [
+    ("관리자", "총무 담당자 · 총무팀", "예산·경고 확인, 전표 점검, 승인·SAP 전기, 홈택스 대사, 기준정보·사용자 관리", "9"),
+    ("사용자", "홍길동 · 영업1팀", "우리 부서 총무 비용 보기, 검토 건 분개 수정 → 승인 요청", "5"),
+    ("사용자", "김철수 · 물류팀", "〃", "5"),
+], widths=[2.2, 3.8, 8.6, 1.4])
+figure("06_user_dashboard.png", "사용자 화면(홍길동 · 영업1팀)", [
+    "화면 보기 — 홍길동 · 사용자.",
+    "사용자에게 보이는 메뉴 5개.",
+    "'영업1팀 · 총무 예산 항목 이번 달' — 우리 부서에 배부된 총무 비용만.",
+])
+para("권한은 메뉴뿐 아니라 버튼 단위로도 적용됩니다. 사용자는 SAP 전기 대신 **승인 요청**만 할 수 있고, "
+     "총무 예산·홈택스·기준정보 화면은 열리지 않습니다.")
+
+# ================================================================== 설정 ====
+h2("설정 (관리자)")
+figure("12_masters.png", "기준정보 › 계정", [
+    "기준정보 탭(정기 전표·계정 규칙·배부 기준·차량·공급업체·부서·계정·연간 항목).",
+    "계정과 예산 주관 — '총무'인 계정만 총무 예산·대시보드에 나옵니다.",
+    "저장.",
+])
+table(["탭", "내용"], [
+    ("정기 전표", "매달 들어와야 하는 전표(공급자·예상 금액·허용 오차·기한일·예산 계정·시작월)"),
+    ("계정 규칙", "공급자·품목 키워드 → 계정·부서·배부 기준·불공제·자동 전기 여부"),
+    ("배부 기준", "임차료(면적)·통신비(인원) 등 부서별 비율"),
+    ("차량", "차량번호 → 부서·사용자·부가세 불공제 여부"),
+    ("공급업체 · 부서 · 계정", "사업자번호 → SAP 공급업체 코드, 코스트센터 이름, 계정 이름과 예산 주관"),
+    ("연간 항목", "재산세·자동차세·보험 갱신·법정 점검의 처리 월·기한·예상 금액"),
+], widths=[4.0, 12.0])
+
+# ================================================================ 알아두기 ====
+h2("알아두기")
+table(["증상", "원인과 해결"], [
+    ("처음 열 때 한참 걸림", "무료 서버가 잠들었다가 깨어나며 예시 데이터를 만드는 중입니다. 10~20초 기다리면 열립니다."),
+    ("ImportError 등 오류 화면", "새 버전이 올라간 직후 서버에 예전 파일이 남은 경우입니다. 오른쪽 아래 Manage app → Reboot app."),
+    ("처리할 일이 없어 보임", "다른 방문자가 이미 처리한 상태입니다. 서버가 다시 시작되면 처음 상태로 돌아갑니다."),
+    ("화면 보기를 바꾸니 메뉴가 사라짐", "사용자 권한에는 관리자 메뉴가 없는 것이 정상입니다."),
+    ("홈택스 엑셀을 못 읽음", "오류에 '인식된 컬럼'이 나옵니다. 홈택스 '목록조회'에서 내려받은 파일인지 확인하세요."),
+], widths=[5.0, 11.0])
+lead("결과를 읽을 때 유의할 점.", "")
+bullets([
+    "모든 업체·사람·금액·사업자번호는 설명용 예시 데이터입니다.",
+    "SAP는 모의 모드로, 전표 형식(BAPI_ACC_DOCUMENT_POST)까지만 만들고 실제 전송은 하지 않습니다. 실제 연결은 pyrfc 설정으로 바꿉니다.",
+    "월말 예상과 경고 기준(102%·98%, 큰 건 예산 5%·300만원)은 조정할 수 있는 추정값입니다.",
+    "공휴일은 2025~2026년 예시이며, 운영 시 정부 발표와 대조해야 합니다.",
+    "로그인 없이 이름을 골라 쓰는 데모 방식입니다. 실제 운영에는 사내 로그인(SSO) 연동이 필요합니다.",
+])
+lead("규모와 품질(참고).", "세금계산서 1,695건(2025-01~2026-10, 월 70~80건, 2025년 공급가액 약 121.7억원)과 정기 전표 19종·"
+     "연간 항목 10종의 예시 데이터로 모든 화면을 확인했고, 파싱·분류·전기·예산 예측·홈택스 대사·권한·연간 항목을 확인하는 "
+     "자동 테스트 26개와 2개 역할 × 전체 메뉴 화면 점검을 갖추고 있습니다.")
+lead("기술 구성(참고).", "Python, Streamlit 화면(클릭 카드·달력은 Custom Components v2), SQLite 저장소, pandas, "
+     "국세청 표준 전자세금계산서 XML 파서, openpyxl·xlrd·lxml(홈택스 엑셀), 팝빌 SDK(선택, 홈택스 API), "
+     "SAP BAPI 전표 생성(모의/pyrfc), pytest(자동 테스트), Playwright(가이드 화면 캡처), Streamlit Community Cloud 배포.")
+
+doc.save(OUT)
+print("saved", OUT)
