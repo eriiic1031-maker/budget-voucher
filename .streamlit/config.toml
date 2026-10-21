@@ -1,0 +1,59 @@
+# 친근한 블루 톤 + 한글 폰트(Noto Sans KR). 라이트/다크 모두 지원.
+
+[theme]
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "10px"
+buttonRadius = "10px"
+font = "'Noto Sans KR':https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+headingFontSizes = ["30px", "24px", "20px", "17px", "15px", "14px"]
+headingFontWeights = [700, 700, 700, 600, 600, 600]
+linkUnderline = false
+
+[theme.light]
+primaryColor = "#3B6FF5"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F7FC"
+codeBackgroundColor = "#EEF2F8"
+textColor = "#1B2333"
+linkColor = "#2F5BD8"
+borderColor = "#E3E8F0"
+grayColor = "#6B7588"
+blueColor = "#3B6FF5"
+greenColor = "#1FA971"
+redColor = "#E5484D"
+yellowColor = "#E8A317"
+orangeColor = "#F2711C"
+violetColor = "#7C5CFA"
+chartCategoricalColors = ["#3B6FF5", "#1FA971", "#F2A93B", "#7C5CFA", "#E5484D", "#22B8CF", "#9AA4B5"]
+dataframeBorderColor = "#E3E8F0"
+dataframeHeaderBackgroundColor = "#F4F7FC"
+
+[theme.dark]
+primaryColor = "#6D93FF"
+backgroundColor = "#0F141C"
+secondaryBackgroundColor = "#18202C"
+codeBackgroundColor = "#202A38"
+textColor = "#EEF2F8"
+linkColor = "#9DB6FF"
+borderColor = "#263142"
+grayColor = "#9AA4B5"
+blueColor = "#6D93FF"
+greenColor = "#3DD68C"
+redColor = "#FF6B6F"
+yellowColor = "#F5C04A"
+orangeColor = "#FF9147"
+violetColor = "#A08BFF"
+chartCategoricalColors = ["#6D93FF", "#3DD68C", "#F5C04A", "#A08BFF", "#FF6B6F", "#4DD4E6", "#7D8799"]
+dataframeBorderColor = "#263142"
+dataframeHeaderBackgroundColor = "#18202C"
+
+[theme.light.sidebar]
+backgroundColor = "#F4F7FC"
+borderColor = "#E3E8F0"
+
+[theme.dark.sidebar]
+backgroundColor = "#0B1017"
+borderColor = "#263142"

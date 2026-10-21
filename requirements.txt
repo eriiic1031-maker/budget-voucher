@@ -1,0 +1,9 @@
+streamlit>=1.57
+pandas>=2.2
+pytest>=8
+openpyxl>=3.1      # 홈택스 엑셀(xlsx) 읽기
+xlrd>=2.0          # 홈택스 엑셀(xls) 읽기
+lxml>=5            # .xls 로 저장된 HTML 표 읽기
+popbill>=1.64      # (선택, 유료) 홈택스 자동 수집 - 팝빌 연동 API
+# 실제 SAP 연결 시 (SAP NW RFC SDK 설치 후)
+# pyrfc>=3.3
