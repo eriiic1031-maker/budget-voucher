@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import streamlit as st
 
+from voucher.annual import due_items
 from voucher.classifier import Proposal, ProposedLine, validate
 from voucher.db import audit, connect, now
 from voucher.pipeline import ingest_xml, post_invoice, process, row_to_invoice, submit_invoice
@@ -27,6 +28,15 @@ st.caption("자동 분류가 확신하지 못한 세금계산서를 확인합니
            + ("승인 요청 건을 확인하고 SAP에 전기하세요." if is_admin else
               "계정·부서를 채워 **승인 요청**하면 관리자가 확인 후 전기합니다."))
 
+# ---------- 이번 달 연간 항목 알림 ----------
+if is_admin:
+    with connect() as conn:
+        ann = [a for a in due_items(conn, st.session_state.month) if a.status != "DONE"]
+    if ann:
+        st.info("이번 달 처리할 연간 항목: " + " · ".join(
+            f"**{a.name}** (기한 {a.due_date[5:].replace('-', '/')}, 예상 {won(a.expected_amount)})" for a in ann)
+            + " — 처리했으면 전표 점검 › 연간 항목에서 체크하세요.", icon=":material/event:")
+
 # ---------- 수동 업로드 (관리자) ----------
 if is_admin:
     with st.expander("XML 직접 업로드", icon=":material/upload_file:"):
@@ -48,7 +58,10 @@ if not is_admin:
     GROUPS = {"검토 필요": ["REVIEW", "ERROR"], "내 승인 요청": ["SUBMITTED"]}
 
 counts = {g: int(pending.status.isin(s).sum()) for g, s in GROUPS.items()}
-default = next((g for g, c in counts.items() if c), list(GROUPS)[0])
+pref = st.session_state.pop("review_group_pref", None)   # 대시보드 카드에서 고른 구분
+if pref in GROUPS:
+    st.session_state.review_nonce += 1                   # 새 기본값이 적용되도록 위젯을 새로 만든다
+default = pref if pref in GROUPS else next((g for g, c in counts.items() if c), list(GROUPS)[0])
 group = st.segmented_control("구분", list(GROUPS), default=default, required=True,
                              format_func=lambda g: f"{g} {counts[g]}", label_visibility="collapsed",
                              key=f"group_{st.session_state.review_nonce}")

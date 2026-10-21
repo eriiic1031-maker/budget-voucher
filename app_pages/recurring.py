@@ -1,6 +1,10 @@
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
+from voucher.annual import due_items, mark_done, months_of
+from voucher.annual import unmark as unmark_annual
 from voucher.budget import invoice_overview
 from voucher.db import connect
 from voucher.recurring import STATUS_LABEL, check_month, mark, mark_checked, unmark, unmark_checked
@@ -11,19 +15,23 @@ actor = st.session_state.actor
 st.session_state.setdefault("check_nonce", 0)
 
 st.title("전표 점검", icon=":material/fact_check:", anchor=False)
-st.caption(f"{month} · **정기 전표**는 매달 빠짐없이 들어왔는지, **비정기 전표**는 금액·용도·부서가 맞는지 확인합니다.")
+st.caption(f"{month} · **정기 전표**는 매달 빠짐없이 들어왔는지, **비정기 전표**는 금액·용도·부서가 맞는지, "
+           "**연간 항목**은 매년 이 시기에 내야 하는 세금·보험·점검을 처리했는지 확인합니다.")
 
 with connect() as conn:
     rows = check_month(conn, month)
     ov = invoice_overview(conn, month, owner=None)
+    annual = due_items(conn, month)
 nonrec = ov[~ov.recurring.astype(bool)]
+annual_open = sum(a.status != "DONE" for a in annual)
 unchecked = int(nonrec.checked_by.isna().sum())
 rec_open = sum(not r.ok for r in rows)
 
-view = st.segmented_control(
-    "구분", ["정기 전표", "비정기 전표"], default="정기 전표", required=True, label_visibility="collapsed",
-    format_func=lambda v: f"{v} · 확인 필요 {rec_open}" if v == "정기 전표" else f"{v} · 미확인 {unchecked}",
-    key="check_view")
+VIEW_LABEL = {"정기 전표": f"정기 전표 · 확인 필요 {rec_open}", "비정기 전표": f"비정기 전표 · 미확인 {unchecked}",
+              "연간 항목": f"연간 항목 · 미처리 {annual_open}"}
+st.session_state.setdefault("check_view", "정기 전표")
+view = st.segmented_control("구분", list(VIEW_LABEL), required=True, label_visibility="collapsed",
+                            format_func=VIEW_LABEL.get, key="check_view")
 
 ICON = {"DONE": "✅", "CONFIRMED": "☑️", "SKIPPED": "➖", "WAITING": "⏳",
         "NOT_POSTED": "🟡", "AMOUNT_DIFF": "🟠", "OVERDUE": "🔴"}
@@ -92,6 +100,55 @@ if view == "정기 전표":
                                         "세금계산서 수신, 전기 전", "기한 전, 아직 미수신", "기한이 지났는데 미수신",
                                         "담당자가 사유 확인 후 완료 처리", "이번 달은 발생하지 않는 건으로 처리"]}),
                  hide_index=True, alt="정기 전표 상태 설명")
+    st.stop()
+
+# ================================================================ 연간 항목 ====
+if view == "연간 항목":
+    ANN_ICON = {"DONE": "✅", "PENDING": "⏳", "OVERDUE": "🔴"}
+    st.caption("세금계산서가 오지 않는 재산세·자동차세·보험 갱신·법정 점검 같은 항목입니다. 처리했으면 금액을 적고 "
+               "**처리 완료**를 누르세요 → 총무 예산 실적에 들어갑니다. 처리 전에는 예상 금액이 월말 예상에 들어갑니다.")
+    if not annual:
+        st.success(f"{month}에는 처리할 연간 항목이 없어요.")
+    for a in annual:
+        with st.container(border=True):
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"**{ANN_ICON[a.status]} {a.name}**")
+                st.badge(a.label, color={"DONE": "green", "PENDING": "blue", "OVERDUE": "red"}[a.status])
+                st.badge(a.category or "기타", color="gray")
+                st.space("stretch")
+                st.caption(f"기한 {a.due_date} · 예상 {won(a.expected_amount)}")
+            if a.item_note:
+                st.caption(a.item_note)
+            if a.status == "DONE":
+                with st.container(horizontal=True, vertical_alignment="center"):
+                    st.markdown(f"처리 금액 **{won(a.amount)}** · 처리일 {a.paid_date} · {a.checked_by}"
+                                + (f" · {a.note}" if a.note else ""))
+                    st.space("stretch")
+                    if st.button("처리 취소", key=f"ann_undo_{a.item_id}", icon=":material/undo:"):
+                        with connect() as conn:
+                            unmark_annual(conn, a.item_id, month)
+                        st.rerun()
+            else:
+                with st.form(f"ann_{a.item_id}_{month}", border=False):
+                    c1, c2, c3 = st.columns([2, 2, 4], vertical_alignment="bottom")
+                    amt = c1.number_input("처리 금액(원)", min_value=0, step=10_000, value=int(a.expected_amount or 0))
+                    paid = c2.date_input("처리일", value=min(date.today(), date.fromisoformat(a.due_date)))
+                    note = c3.text_input("메모", placeholder="예: 위택스 납부, 전년 대비 6% 인상")
+                    if st.form_submit_button("처리 완료", type="primary", icon=":material/task_alt:"):
+                        with connect() as conn:
+                            mark_done(conn, a.item_id, month, int(amt), paid.isoformat(), note.strip(), actor)
+                        st.toast(f"{a.name} 처리 완료")
+                        st.rerun()
+
+    with st.expander("연간 항목 전체 일정 (1~12월)"):
+        with connect() as conn:
+            items = conn.execute("SELECT * FROM annual_items WHERE active=1 ORDER BY id").fetchall()
+        grid = pd.DataFrame([{"항목": it["name"], "분류": it["category"], "예상 금액": it["expected_amount"],
+                              **{f"{m}월": ("●" if m in months_of(it) else "") for m in range(1, 13)}}
+                             for it in items])
+        st.dataframe(grid, hide_index=True, alt="연간 항목 월별 일정",
+                     column_config={"예상 금액": st.column_config.NumberColumn(format="localized")})
+        st.caption("항목 추가·수정은 기준정보 › 연간 항목에서 합니다.")
     st.stop()
 
 # ================================================================= 비정기 ====

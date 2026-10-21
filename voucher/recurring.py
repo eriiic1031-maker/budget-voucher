@@ -54,7 +54,8 @@ def check_month(conn: sqlite3.Connection, month: str, today: date | None = None)
     start, end, last_day = _month_bounds(month)
     result = []
 
-    for rv in conn.execute("SELECT * FROM recurring_vouchers WHERE active = 1 ORDER BY due_day, name"):
+    for rv in conn.execute("SELECT * FROM recurring_vouchers WHERE active = 1 AND "
+                           "(start_month IS NULL OR start_month <= ?) ORDER BY due_day, name", (month,)):
         due = date.fromisoformat(f"{month}-{min(rv['due_day'], last_day):02d}")
         manual = conn.execute("SELECT * FROM recurring_checks WHERE recurring_id=? AND month=?",
                               (rv["id"], month)).fetchone()

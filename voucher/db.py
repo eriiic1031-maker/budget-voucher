@@ -94,7 +94,31 @@ CREATE TABLE IF NOT EXISTS recurring_vouchers (
     due_day         INTEGER NOT NULL DEFAULT 10,  -- 매월 이 날까지 전기되어야 함
     owner           TEXT,
     gl_account      TEXT,                         -- 예산 항목 (월말 예상에 미수신분을 반영할 계정)
+    start_month     TEXT,                         -- YYYY-MM, 이 달부터 점검 (신규 계약)
     active          INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS annual_items (           -- 매년 같은 시기에 처리할 항목 (재산세, 자동차세, 보험 갱신 등)
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    months          TEXT NOT NULL,                -- 처리 월, 쉼표 구분 (예: '7' / '6,12')
+    due_day         INTEGER NOT NULL DEFAULT 31,  -- 납부·처리 기한일
+    gl_account      TEXT,
+    expected_amount INTEGER,                      -- 회당 예상 금액(원)
+    category        TEXT,                         -- 세금 / 보험 / 점검 등
+    note            TEXT,
+    active          INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS annual_checks (
+    item_id         INTEGER NOT NULL REFERENCES annual_items(id),
+    month           TEXT NOT NULL,                -- YYYY-MM
+    amount          INTEGER,
+    paid_date       TEXT,
+    note            TEXT,
+    checked_by      TEXT,
+    checked_at      TEXT NOT NULL,
+    PRIMARY KEY (item_id, month)
 );
 
 CREATE TABLE IF NOT EXISTS recurring_checks (
@@ -161,6 +185,11 @@ CREATE TABLE IF NOT EXISTS budgets (                -- 월별 예산 (계정 단
     PRIMARY KEY (year, month, gl_account)
 );
 
+CREATE TABLE IF NOT EXISTS app_meta (
+    key             TEXT PRIMARY KEY,
+    value           TEXT
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id      INTEGER,
@@ -185,7 +214,7 @@ def init_db(path: Path | None = None) -> None:
         for table, col, ddl in [
             ("invoices", "submitted_by", "TEXT"), ("invoices", "checked_by", "TEXT"),
             ("invoices", "checked_at", "TEXT"), ("invoices", "check_note", "TEXT"),
-            ("recurring_vouchers", "gl_account", "TEXT"), ("gl_accounts", "owner", "TEXT NOT NULL DEFAULT '총무'"),
+            ("recurring_vouchers", "gl_account", "TEXT"), ("recurring_vouchers", "start_month", "TEXT"), ("gl_accounts", "owner", "TEXT NOT NULL DEFAULT '총무'"),
         ]:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
             if col not in cols:
@@ -205,6 +234,28 @@ def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
+
+def reset_db(path: Path | None = None) -> None:
+    """모든 표의 데이터를 비운다 (파일을 지우지 않아 실행 중인 앱이 있어도 안전)."""
+    init_db(path)
+    with connect(path) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        for t in tables:
+            conn.execute(f"DELETE FROM {t}")
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='sqlite_sequence'").fetchone():
+            conn.execute("DELETE FROM sqlite_sequence")
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO app_meta(key, value) VALUES (?,?)", (key, value))
 
 
 def audit(conn: sqlite3.Connection, invoice_id: int | None, action: str, detail: dict | str | None = None,

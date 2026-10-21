@@ -16,7 +16,7 @@ STATUS_LABEL = {
 ACTION_LABEL = {
     "INGEST": "세금계산서 수신", "CLASSIFY": "자동 분류", "POST": "SAP 전기", "POST_ERROR": "전기 오류",
     "SUBMIT": "승인 요청", "IGNORE": "전기 제외", "RECURRING_MARK": "정기 전표 확인", "HOMETAX_SYNC": "홈택스 수집",
-    "PARSE_ERROR": "XML 오류", "CHECK": "비정기 전표 확인", "REJECT": "반려",
+    "PARSE_ERROR": "XML 오류", "CHECK": "비정기 전표 확인", "REJECT": "반려", "ANNUAL_DONE": "연간 항목 처리",
 }
 
 
@@ -82,6 +82,16 @@ def expense_lines(months: list[str], owner: str | None = "총무") -> pd.DataFra
                 "사용자ID": l.get("user_id"), "사용자": users.get(l.get("user_id"), l.get("user_id")),
                 "금액": l.get("amount", 0),
             })
+    # 세금·보험 등 연간 항목 처리분 (세금계산서 없음, 총무팀 귀속)
+    from .annual import paid_rows
+    with connect() as conn:
+        paid = paid_rows(conn, min(months) + "-01", max(months) + "-31")
+    for a in paid:
+        if a["paid_date"][:7] in months and (not owner or a["gl_account"] in gl):
+            rows.append({"invoice_id": None, "발행일": a["paid_date"], "월": a["paid_date"][:7], "공급자": a["category"],
+                         "SAP 전표번호": None, "품목": a["name"], "계정코드": a["gl_account"],
+                         "계정": gl.get(a["gl_account"], a["gl_account"]), "부서코드": "K1200", "부서": cc.get("K1200"),
+                         "사용자ID": None, "사용자": None, "금액": int(a["amount"])})
     return pd.DataFrame(rows, columns=["invoice_id", "발행일", "월", "공급자", "SAP 전표번호", "품목", "계정코드", "계정",
                                        "부서코드", "부서", "사용자ID", "사용자", "금액"])
 
@@ -92,7 +102,7 @@ def recent_activity(limit: int = 8) -> pd.DataFrame:
             """SELECT a.at, a.action, a.actor, COALESCE(u.name, a.actor) AS who, i.supplier_name, i.total_amount
                FROM audit_log a LEFT JOIN invoices i ON i.id = a.invoice_id
                LEFT JOIN users u ON u.user_id = a.actor
-               WHERE a.action IN ('POST','SUBMIT','RECURRING_MARK','HOMETAX_SYNC','IGNORE','POST_ERROR','REJECT')
+               WHERE a.action IN ('POST','SUBMIT','RECURRING_MARK','HOMETAX_SYNC','IGNORE','POST_ERROR','REJECT','ANNUAL_DONE')
                ORDER BY a.id DESC LIMIT ?""", conn, params=[limit])
     df["who"] = df["who"].replace({"auto": "자동 전기", "system": "시스템", "batch": "배치"})
     df["활동"] = df["action"].map(ACTION_LABEL).fillna(df["action"])

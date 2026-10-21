@@ -2,7 +2,10 @@
 
 - 2025-01 ~ 2026-10(21일까지) 세금계산서 월 70~80건 · 2025년 비용 합계 약 120억원
 - 정기 전표 17종(임차료·관리비·전기·가스·통신·렌탈·리스·식당·용역·주차·SaaS) + 비정기 약 60건/월
-- 2026년 총무 예산 = 2025년 같은 달 실적 × 1.05
+- 2026년 총무 예산 = 2025년 같은 달 실적 × 1.05, 2025년 예산 = 2026년 예산 ÷ 1.05
+- 연간 항목 10종 (재산세 7·9월, 자동차세 6·12월, 주민세 8월, 보험 갱신, 법정 점검 등) — 2025년~2026-09 처리 완료
+- 작년보다 늘어난 비용 예시: 사내 피트니스 제휴(2026-03 신규), 보안관제 서비스(2026-05 신규),
+  본사 주차 5면 추가(2026-07), 재산세·차량보험 인상, 전기요금 인상, 대회의실 리모델링
 - 2026년 10월에는 예산 경고가 보이도록 일부러 넣은 상황:
     수선비: 대회의실 리모델링 3,800만원 → 예산 초과
     차량유지비: 유가 상승으로 주유 속도 +35%, 엔진 수리 680만원 → 초과 예상
@@ -31,11 +34,12 @@ import pandas as pd
 from .auth import upsert_user
 from .classifier import Proposal
 from .config import BASE_DIR, settings
-from .db import connect, init_db
+from .db import connect, init_db, reset_db, set_meta
 from .pipeline import ingest_xml, post_invoice, submit_invoice
 from .recurring import mark_checked, recurring_map
 
 NS = "urn:kr:or:kec:standard:Tax:ReusableAggregateBusinessInformationEntitySchemaModule:1:0"
+SEED_VERSION = "3"   # 예시 데이터 구성이 바뀌면 올린다 → 앱이 처음 열릴 때 예시 데이터를 다시 만든다
 TODAY = date(2026, 10, 21)
 
 DEMO_USERS = [
@@ -56,6 +60,7 @@ GL_ACCOUNTS = [
     ("81400000", "통신비", "총무"), ("81920000", "렌탈료", "총무"), ("82210000", "차량리스료", "총무"),
     ("82200000", "차량유지비", "총무"), ("81100000", "복리후생비", "총무"), ("83200000", "용역비", "총무"),
     ("83000000", "소모품비", "총무"), ("82000000", "수선비", "총무"),
+    ("81700000", "세금과공과", "총무"), ("82100000", "보험료", "총무"),
     ("82400000", "운반비", "물류팀"), ("83100000", "지급수수료", "IT팀"), ("83300000", "광고선전비", "마케팅팀"),
     ("83400000", "교육훈련비", "인사팀"), ("11350000", "부가세대급금", "회계"),
 ]
@@ -88,6 +93,8 @@ V = {  # key: (bizno, sap_vendor, name)
     "courier": ("1248100010", "200010", "한결로지스(주)"),
     "ad": ("1018100091", "200091", "빛나애드(주)"),
     "edu": ("2208100095", "200095", "배움에듀(주)"),
+    "fitness": ("1198100055", "200055", "튼튼헬스(주)"),     # 2026-03 신규 계약
+    "secmon": ("1198100056", "200056", "세이프넷(주)"),      # 2026-05 신규 계약
 }
 VENDORS = [v for v in V.values()]
 
@@ -120,6 +127,8 @@ RULES = [
     (10, "courier", None, "82400000", "K3100", None, 0, 1, "택배·운송 (물류팀 예산)"),
     (10, "ad", None, "83300000", "K2100", None, 0, 1, "광고 (마케팅 예산)"),
     (10, "edu", None, "83400000", "K1100", None, 0, 1, "교육 (인사 예산)"),
+    (10, "fitness", None, "81100000", None, "HEADCOUNT", 0, 1, "사내 피트니스 제휴 (2026-03~)"),
+    (10, "secmon", None, "83200000", None, "OFFICE_RENT", 0, 1, "보안관제 서비스 (2026-05~)"),
     (50, None, "주유", "82200000", None, None, 0, 0, "미등록 주유소 - 검토"),
 ]
 
@@ -149,14 +158,14 @@ VEHICLES = [
     ("22차6802", "K2100", "E1044", "조은비", 1, 1_280_000),
 ]
 
-# 정기 전표: name, vendor, keyword, 공급가 기준액(2025), 허용오차%, 기한일, 담당, gl, 2026 인상률
+# 정기 전표: name, vendor, keyword, 공급가 기준액(2025), 허용오차%, 기한일, 담당, gl, 2026 인상률, 시작월
 RECURRING = [
     ("본사 임차료", "hq_rent", None, 320_000_000, 0, 5, "총무팀", "81900000", 1.03),
     ("본사 관리비", "hq_mgmt", None, 85_000_000, 5, 5, "총무팀", "81910000", 1.03),
     ("부산지점 임차료", "bs_rent", None, 45_000_000, 0, 5, "총무팀", "81900000", 1.03),
     ("대전지점 임차료", "dj_rent", None, 30_000_000, 0, 5, "총무팀", "81900000", 1.03),
     ("차량 리스료", "lease", None, None, 0, 10, "총무팀", "82210000", 1.0),
-    ("본사 정기주차", "parking", None, 4_500_000, 0, 12, "총무팀", "82200000", 1.03),
+    ("본사 정기주차", "parking", None, 6_000_000, 30, 12, "총무팀", "82200000", 1.0),   # 2026-07 5면 추가
     ("복합기 렌탈료", "copier", None, 9_000_000, 10, 12, "총무팀", "81920000", 1.03),
     ("전기요금", "power", None, 38_000_000, 40, 15, "총무팀", "81300000", 1.09),
     ("인터넷·전화 요금", "tel", "인터넷", 18_000_000, 10, 15, "총무팀", "81400000", 1.03),
@@ -168,9 +177,26 @@ RECURRING = [
     ("시설관리 용역", "facility", None, 28_000_000, 0, 28, "총무팀", "83200000", 1.03),
     ("구내식당 위탁", "food", None, 160_000_000, 10, 30, "총무팀", "81100000", 1.03),
     ("업무 SaaS 사용료", "saas", None, 9_900_000, 5, 30, "IT팀", "83100000", 1.0),
+    ("사내 피트니스 제휴", "fitness", None, 3_000_000, 0, 15, "총무팀", "81100000", 1.0, "2026-03"),
+    ("보안관제 서비스", "secmon", None, 1_800_000, 0, 28, "총무팀", "83200000", 1.0, "2026-05"),
+]
+RECURRING = [r if len(r) == 10 else (*r, None) for r in RECURRING]
+
+# 연간 항목: 이름, 처리월, 기한일, gl, 2025 금액, 2026 금액, 분류, 메모
+ANNUAL = [
+    ("법인차량 보험 갱신", "1", 20, "82100000", 14_400_000, 15_840_000, "보험", "12대 일괄 갱신"),
+    ("화재보험 갱신", "3", 31, "82100000", 9_800_000, 10_290_000, "보험", "본사·지점 건물"),
+    ("소방시설 종합정밀점검", "4", 30, "83200000", 3_300_000, 3_520_000, "점검", "연 1회 법정 점검"),
+    ("자동차세", "6,12", 30, "81700000", 1_450_000, 1_450_000, "세금", "법인차량 12대 · 1월 연납 시 할인"),
+    ("재산세(건물분)", "7", 31, "81700000", 18_500_000, 19_610_000, "세금", "7월 16~31일 납부"),
+    ("주민세(사업소분)", "8", 31, "81700000", 2_800_000, 2_940_000, "세금", "8월 1~31일 신고·납부"),
+    ("재산세(토지분)", "9", 30, "81700000", 12_300_000, 13_160_000, "세금", "9월 16~30일 납부"),
+    ("정기 소독", "3,6,9,12", 25, "83200000", 880_000, 920_000, "점검", "분기 1회 방역"),
+    ("전기 정기 안전점검", "10", 31, "83200000", 1_500_000, 1_650_000, "점검", "연 1회 · 정전 일정 공지 필요"),
+    ("승강기 정기검사", "11", 30, "83200000", 650_000, 680_000, "점검", "연 1회"),
 ]
 # 정기 전표 발행일(공급자가 보내는 날)
-ISSUE_DAY = {"hq_rent": 1, "hq_mgmt": 3, "bs_rent": 1, "dj_rent": 1, "lease": 5, "parking": 9, "copier": 10,
+ISSUE_DAY = {"fitness": 14, "secmon": 24, "hq_rent": 1, "hq_mgmt": 3, "bs_rent": 1, "dj_rent": 1, "lease": 5, "parking": 9, "copier": 10,
              "power": 12, "tel_인터넷": 12, "gas": 14, "tel_휴대폰": 15, "water": 20, "guard": 25, "clean": 25,
              "facility": 25, "food": 27, "saas": 28}
 POWER_SEASON = {1: 1.15, 2: 1.1, 3: 0.95, 4: 0.85, 5: 0.85, 6: 1.0, 7: 1.35, 8: 1.45, 9: 1.05, 10: 0.9,
@@ -244,7 +270,9 @@ def month_invoices(y: int, m: int, rnd: random.Random, cutoff: int | None = None
 
     mm = f"{m}월분"
     # ---- 정기 ----
-    for name, vk, kw, base, _tol, _due, _own, _gl, rise in RECURRING:
+    for name, vk, kw, base, _tol, _due, _own, _gl, rise, start in RECURRING:
+        if start and f"{y}-{m:02d}" < start:
+            continue
         f = rise if k26 else 1.0
         key = f"{vk}_{kw}" if kw else vk
         day = ISSUE_DAY[key]
@@ -253,6 +281,8 @@ def month_invoices(y: int, m: int, rnd: random.Random, cutoff: int | None = None
             add(vk, day, items)
             continue
         amt = round(base * f, -4)
+        if vk == "parking":   # 2025~2026-06 은 15면(450만원), 2026-07부터 20면(600만원)
+            amt = 6_000_000 if (y, m) >= (2026, 7) else 4_500_000
         if vk == "power":
             amt *= POWER_SEASON[m] * rnd.uniform(0.96, 1.04)
         elif vk == "gas":
@@ -364,13 +394,30 @@ def load_master(conn) -> None:
     conn.executemany("INSERT INTO allocation_keys(key, cost_center, user_id, ratio) VALUES (?,?,?,?)", ALLOC)
     conn.executemany("INSERT OR REPLACE INTO vehicles VALUES (?,?,?,?,?)", [v[:5] for v in VEHICLES])
     rows = []
-    for name, vk, kw, base, tol, due, owner, gl, rise in RECURRING:
+    for name, vk, kw, base, tol, due, owner, gl, rise, start in RECURRING:
         supply = LEASE_TOTAL if vk == "lease" else round(base * rise, -4)   # 발행 금액과 같은 방식으로 계산
         total = supply + int(supply * 0.1)
-        rows.append((name, V[vk][0], kw, total, tol, due, owner, gl))
+        rows.append((name, V[vk][0], kw, total, tol, due, owner, gl, start))
     conn.executemany(
         "INSERT INTO recurring_vouchers(name, supplier_bizno, keyword, expected_amount, tolerance_pct, due_day,"
-        " owner, gl_account) VALUES (?,?,?,?,?,?,?,?)", rows)
+        " owner, gl_account, start_month) VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    conn.executemany(
+        "INSERT INTO annual_items(name, months, due_day, gl_account, expected_amount, category, note)"
+        " VALUES (?,?,?,?,?,?,?)",
+        [(n, ms, d, gl, a26, cat, note) for n, ms, d, gl, _a25, a26, cat, note in ANNUAL])
+
+
+def load_annual_history(conn) -> None:
+    """연간 항목 처리 이력: 2025년 전부 + 2026년은 기준일 이전 달까지 처리 완료로 체크."""
+    from .annual import mark_done
+    ids = {r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM annual_items")}
+    for n, ms, d, _gl, a25, a26, _cat, _note in ANNUAL:
+        for mm in [int(x) for x in ms.split(",")]:
+            for y, amt in ((2025, a25), (2026, a26)):
+                if (y, mm) >= (TODAY.year, TODAY.month):
+                    continue
+                day = min(d, calendar.monthrange(y, mm)[1]) - 3
+                mark_done(conn, ids[n], f"{y}-{mm:02d}", amt, f"{y}-{mm:02d}-{day:02d}", "", "admin")
 
 
 def load_users(conn) -> None:
@@ -387,6 +434,9 @@ def load_budgets(conn, year: int = 2026, uplift: float = 1.05) -> None:
     rows = [(year, m, gl, int(round(agg.get((m, gl), 0) * uplift, -6)))
             for gl in owner_accounts(conn) for m in range(1, 13)]
     conn.executemany("INSERT OR REPLACE INTO budgets VALUES (?,?,?,?)", rows)
+    # 작년 예산: 올해 예산이 작년 예산의 1.05배가 되도록 (100만원 단위)
+    conn.executemany("INSERT OR REPLACE INTO budgets VALUES (?,?,?,?)",
+                     [(year - 1, m, gl, int(round(amt / uplift, -6))) for _, m, gl, amt in rows])
 
 
 def _realistic_timestamps(conn) -> None:
@@ -403,8 +453,8 @@ def _realistic_timestamps(conn) -> None:
 
 
 def run(reset: bool = True) -> None:
-    if reset and settings.db_path.exists():
-        settings.db_path.unlink()
+    if reset:
+        reset_db()
     init_db()
     sample_dir = BASE_DIR / "samples"
     sample_dir.mkdir(exist_ok=True)
@@ -452,9 +502,12 @@ def run(reset: bool = True) -> None:
             if r["id"] not in rec]
         mark_checked(conn, ids, "admin")
 
+        load_annual_history(conn)
+        conn.execute("DELETE FROM audit_log WHERE action = 'ANNUAL_DONE'")   # 과거 이력이 '최근 활동'을 덮지 않게
         load_budgets(conn)
         _realistic_timestamps(conn)
 
+        set_meta(conn, "seed_version", SEED_VERSION)
         n = conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0]
         y25 = conn.execute("SELECT SUM(supply_amount) FROM invoices WHERE issue_date LIKE '2025%'").fetchone()[0]
 

@@ -16,6 +16,7 @@ from datetime import date
 
 import pandas as pd
 
+from .annual import due_items, paid_rows
 from .recurring import check_month, recurring_map
 from .ui import short_won
 
@@ -44,7 +45,7 @@ def owner_accounts(conn: sqlite3.Connection, owner: str = OWNER) -> dict[str, st
 
 
 def load_lines(conn: sqlite3.Connection, start: str, end: str, include_pending: bool = True,
-               owner: str | None = OWNER) -> pd.DataFrame:
+               owner: str | None = OWNER, include_annual: bool = True) -> pd.DataFrame:
     """비용 라인 (전기 완료 + 선택적으로 전기 전 건). 부가세대급금은 비용이 아니므로 없다."""
     statuses = ("POSTED",) + (PENDING if include_pending else ())
     rows = conn.execute(
@@ -63,12 +64,19 @@ def load_lines(conn: sqlite3.Connection, start: str, end: str, include_pending: 
             out.append((r["id"], r["issue_date"], r["issue_date"][:7], r["supplier_name"], l.get("item_name"),
                         gl, accounts.get(gl, gl), l.get("cost_center"), cc.get(l.get("cost_center")),
                         l.get("user_id"), int(l.get("amount") or 0), r["status"], r["id"] in rec, rec.get(r["id"]),
-                        r["checked_by"]))
+                        r["checked_by"], False))
+    if include_annual:   # 세금·보험 등 세금계산서 없이 처리한 연간 항목 (총무팀 귀속)
+        for a in paid_rows(conn, start, end):
+            if owner and a["gl_account"] not in accounts:
+                continue
+            out.append((None, a["paid_date"], a["paid_date"][:7], a["category"] or "연간 항목", a["name"],
+                        a["gl_account"], accounts.get(a["gl_account"], a["gl_account"]), "K1200", cc.get("K1200"),
+                        None, int(a["amount"]), "POSTED", False, None, "annual", True))
     df = pd.DataFrame(out, columns=["invoice_id", "date", "month", "supplier", "item", "gl", "account", "cc",
                                     "dept", "user_id", "amount", "status", "recurring", "recurring_name",
-                                    "checked_by"])
+                                    "checked_by", "annual"])
     # 빈 결과에서도 bool/int 이어야 df[df.recurring] 가 '열 선택'으로 오해되지 않는다
-    return df.astype({"recurring": bool, "amount": "int64"})
+    return df.astype({"recurring": bool, "annual": bool, "amount": "int64"})
 
 
 def _join(values, sep: str = ", ") -> str:
@@ -79,7 +87,7 @@ def _join(values, sep: str = ", ") -> str:
 def invoice_overview(conn: sqlite3.Connection, month: str, owner: str | None = OWNER) -> pd.DataFrame:
     """월간 세금계산서 1건 = 1행. 정기/비정기, 계정·부서, 신규 거래처, 확인 여부 (전표 점검 화면용)."""
     start, end, _ = month_bounds(month)
-    lines = load_lines(conn, start, end, include_pending=True, owner=owner)
+    lines = load_lines(conn, start, end, include_pending=True, owner=owner, include_annual=False)
     if lines.empty:
         return pd.DataFrame(columns=["invoice_id", "date", "supplier", "item", "account", "dept", "amount",
                                      "status", "recurring", "recurring_name", "checked_by", "checked_at",
@@ -197,16 +205,20 @@ def forecast_month(conn: sqlite3.Connection, month: str, today: date | None = No
             rec_diff.setdefault(gl, []).append(
                 f"{r.name} 예상 {short_won(r.expected_amount)} → 실제 {short_won(r.actual_amount)}")
 
+    annual_due = [a for a in due_items(conn, month, today) if a.status != "DONE" and a.expected_amount]
+
     out = []
     for gl, name in accounts.items():
         c = cur[cur.gl == gl]
+        ann_act = c[c.annual]
+        ann_rem = [a for a in annual_due if a.gl_account == gl]
         budget = int(bud.get(gl, 0))
         actual = int(c.amount.sum())
         pending = int(c[c.status != "POSTED"].amount.sum())
         rec_act = int(c[c.recurring].amount.sum())
-        nonrec = c[~c.recurring]
+        nonrec = c[~c.recurring & ~c.annual]
         rem_list = rec_remaining.get(gl, [])
-        rec_rem = sum(a for _, a, _ in rem_list)
+        rec_rem = sum(a for _, a, _ in rem_list) + sum(a.expected_amount for a in ann_rem)
 
         # 비정기: 예산의 5%(최소 300만원) 이상인 큰 건은 일회성으로 보고 속도 계산에서 뺀다
         per_inv = nonrec.groupby(["invoice_id", "supplier", "item"], as_index=False)["amount"].sum()
@@ -215,9 +227,9 @@ def forecast_month(conn: sqlite3.Connection, month: str, today: date | None = No
 
         ly_c = ly[ly.gl == gl]
         ly_total = int(ly_c.amount.sum())
-        ly_nonrec = int(ly_c[~ly_c.recurring].amount.sum())
-        t_now = ytd[(ytd.gl == gl) & ~ytd.recurring].amount.sum()
-        t_ly = ytd_ly[(ytd_ly.gl == gl) & ~ytd_ly.recurring].amount.sum()
+        ly_nonrec = int(ly_c[~ly_c.recurring & ~ly_c.annual].amount.sum())
+        t_now = ytd[(ytd.gl == gl) & ~ytd.recurring & ~ytd.annual].amount.sum()
+        t_ly = ytd_ly[(ytd_ly.gl == gl) & ~ytd_ly.recurring & ~ytd_ly.annual].amount.sum()
         trend = min(max(t_now / t_ly, 0.7), 1.6) if t_ly > 0 else 1.0
         base = ly_nonrec * trend                         # 작년 같은 달 × 올해 추세
 
@@ -229,7 +241,7 @@ def forecast_month(conn: sqlite3.Connection, month: str, today: date | None = No
         else:
             runrate = rest_act / f                        # 지금 속도로 한 달을 채우면
             rest_full = rest_act + (1 - f) * (f * runrate + (1 - f) * base)
-        forecast = int(rec_act + rec_rem + big.amount.sum() + rest_full)
+        forecast = int(rec_act + int(ann_act.amount.sum()) + rec_rem + big.amount.sum() + rest_full)
 
         if not budget:
             status = "NO_BUDGET" if actual else "OK"
@@ -243,7 +255,7 @@ def forecast_month(conn: sqlite3.Connection, month: str, today: date | None = No
             status = "OK"
 
         reasons: list[str] = []
-        if status != "OK" or rem_list or len(big):
+        if status != "OK" or rem_list or len(big) or ann_rem or len(ann_act):
             if status == "OVER":
                 reasons.append(f"이미 예산을 **{short_won(actual - budget)}** 넘었습니다 "
                                f"(예산 {short_won(budget)} / 사용 {short_won(actual)}).")
@@ -258,6 +270,14 @@ def forecast_month(conn: sqlite3.Connection, month: str, today: date | None = No
                 if st.endswith("_S"):
                     notes.append("작년 같은 달 기준 추정")
                 reasons.append(f"아직 안 들어온 정기 전표 **{nm}** {short_won(amt)} ({', '.join(notes)}).")
+            for a in ann_rem:
+                when = "기한이 지났습니다" if a.status == "OVERDUE" else "기한 " + a.due_date[5:]
+                reasons.append(f"아직 처리 안 한 연간 항목 **{a.name}** {short_won(a.expected_amount)} ({when}).")
+            ly_ann = ly_c[ly_c.annual].groupby("item").amount.sum()
+            for r in ann_act.itertuples():
+                prev = int(ly_ann.get(r.item, 0))
+                reasons.append(f"연간 항목 **{r.item}** {short_won(r.amount)} 처리"
+                               + (f" (작년 {short_won(prev)}, {r.amount / prev - 1:+.0%})." if prev else "."))
             for d in rec_diff.get(gl, []):
                 reasons.append(f"정기 전표 금액 증가: {d}.")
             for b in big.sort_values("amount", ascending=False).itertuples():
@@ -267,11 +287,12 @@ def forecast_month(conn: sqlite3.Connection, month: str, today: date | None = No
                 reasons.append(f"비정기 지출 속도가 작년 같은 달보다 **{runrate / base - 1:.0%} 빠릅니다** "
                                f"(이 속도면 한 달 {short_won(runrate)}, 작년 {short_won(ly_nonrec)}).")
             ly_rec = int(ly_c[ly_c.recurring].amount.sum())
-            if ly_rec and rec_act + rec_rem > ly_rec * 1.05:
+            rec_only = rec_act + sum(a for _, a, _ in rem_list)
+            if ly_rec and rec_only > ly_rec * 1.05:
                 names = ", ".join(sorted(set(c[c.recurring].recurring_name.dropna()) | {n for n, _, _ in rem_list}))
                 reasons.append(f"정기 전표({names})가 작년 같은 달보다 "
-                               f"**{(rec_act + rec_rem) / ly_rec - 1:.0%} 늘었습니다** "
-                               f"({short_won(ly_rec)} → {short_won(rec_act + rec_rem)}). 단가·요금 인상 여부를 확인하세요.")
+                               f"**{rec_only / ly_rec - 1:.0%} 늘었습니다** "
+                               f"({short_won(ly_rec)} → {short_won(rec_only)}). 단가·요금 인상·신규 계약 여부를 확인하세요.")
             if trend >= 1.15 and t_ly > 0:
                 reasons.append(f"올해 이 계정의 비정기 지출이 작년보다 {trend - 1:.0%} 늘어나는 추세입니다.")
             if budget and ly_total and budget < ly_total * 0.97:
@@ -310,3 +331,52 @@ def annual_summary(conn: sqlite3.Connection, year: int, until_month: int) -> pd.
     df["누적 집행률"] = (df["누적 실적"] / df["누적 예산"]).where(df["누적 예산"] > 0)
     df["연간 집행률"] = (df["누적 실적"] / df["연간 예산"]).where(df["연간 예산"] > 0)
     return df
+
+
+def yoy_increase(conn: sqlite3.Connection, month: str, today: date | None = None, scope: str = "ytd",
+                 top: int = 6) -> tuple[pd.DataFrame, int, int]:
+    """작년 같은 기간보다 늘어난 비용과 그 원인(공급자·품목).
+
+    scope='month' : 이번 달 1일~오늘 vs 작년 같은 달 같은 기간
+    scope='ytd'   : 올해 1월 1일~오늘 vs 작년 같은 기간
+    반환: (계정별 증가 표, 올해 합계, 작년 합계). '원인' = 증가분이 큰 정기 전표/공급자/연간 항목 최대 3개.
+    """
+    today = today or date.today()
+    y, m = map(int, month.split("-"))
+    start_m, end_m, _ = month_bounds(month)
+    end = min(end_m, today.isoformat()) if today.isoformat() >= start_m else end_m
+    start = f"{y}-01-01" if scope == "ytd" else start_m
+    ly_start, ly_end = start.replace(str(y), str(y - 1), 1), end.replace(str(y), str(y - 1), 1)
+    cur = load_lines(conn, start, end, include_pending=True)
+    ly = load_lines(conn, ly_start, ly_end, include_pending=False)
+    tot_cur, tot_ly = int(cur.amount.sum()), int(ly.amount.sum())
+
+    def key(df):   # 정기는 정기 전표 이름, 연간 항목은 항목 이름, 나머지는 공급자
+        return df.recurring_name.fillna(df.supplier.where(~df.annual, df.item))
+
+    cur = cur.assign(k=key(cur))
+    ly = ly.assign(k=key(ly))
+    rows = []
+    for gl, g in cur.groupby("gl"):
+        g_ly = ly[ly.gl == gl]
+        diff = int(g.amount.sum() - g_ly.amount.sum())
+        if diff <= 0:
+            continue
+        by = (g.groupby("k").amount.sum().to_frame("now")
+              .join(g_ly.groupby("k").amount.sum().to_frame("ly"), how="outer").fillna(0))
+        by["d"] = by["now"] - by["ly"]
+        drivers = []
+        for k, r in by[by.d > 0].sort_values("d", ascending=False).head(3).iterrows():
+            text = f"{k} 신규 {short_won(r.now)}" if r.ly == 0 else f"{k} {short_won(r.ly)}→{short_won(r.now)}"
+            # 비정기 공급자는 무엇 때문에 늘었는지 가장 큰 품목을 붙인다
+            items = g[(g.k == k) & ~g.recurring & ~g.annual].groupby("item").amount.sum()
+            if r.ly and len(items) > 1:
+                top_item, top_amt = items.idxmax(), items.max()
+                if top_amt >= r.d * 0.3:
+                    text += f" (최대: {top_item} {short_won(top_amt)})"
+            drivers.append(text)
+        ly_sum = g_ly.amount.sum()
+        rows.append({"계정": g.account.iloc[0], "올해": int(g.amount.sum()), "작년": int(ly_sum),
+                     "증가": diff, "증가율": diff / ly_sum if ly_sum else None, "원인": " · ".join(drivers)})
+    df = pd.DataFrame(rows, columns=["계정", "올해", "작년", "증가", "증가율", "원인"])
+    return df.sort_values("증가", ascending=False).head(top).reset_index(drop=True), tot_cur, tot_ly

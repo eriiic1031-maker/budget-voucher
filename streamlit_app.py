@@ -19,12 +19,15 @@ init_db()
 
 @st.cache_resource(show_spinner=False)
 def ensure_demo_data() -> bool:
-    """DB가 비어 있으면(클라우드 첫 실행 등) 예시 데이터를 한 번 만든다."""
+    """DB가 비어 있거나(클라우드 첫 실행) 예시 데이터 버전이 바뀌었으면 예시 데이터를 새로 만든다."""
+    from voucher.db import get_meta
+    from voucher.seed import SEED_VERSION, run
     with connect() as conn:
-        if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
-            return False
-    from voucher.seed import run
-    run(reset=False)
+        has_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        version = get_meta(conn, "seed_version")
+    if has_users and version == SEED_VERSION:
+        return False
+    run(reset=True)
     return True
 
 

@@ -2,11 +2,14 @@ from datetime import date
 
 import streamlit as st
 
-from voucher.budget import forecast_month, invoice_overview
+from voucher.annual import due_items
+from voucher.budget import forecast_month, invoice_overview, yoy_increase
+from voucher.components import month_calendar, task_cards
 from voucher.db import connect
 from voucher.hometax import last_sync
 from voucher.queries import expense_lines, invoices, prev_month, recent_activity
 from voucher.recurring import check_month
+from voucher.schedule import month_events, next_month_annual
 from voucher.ui import greeting, pct_change, short_won, time_ago
 
 user = st.session_state.user
@@ -30,51 +33,61 @@ with connect() as conn:
         bud = forecast_month(conn, month)
         ov = invoice_overview(conn, month, owner=None)
         nonrec_open = int((~ov.recurring.astype(bool) & ov.checked_by.isna()).sum())
+        annual_open = sum(a.status != "DONE" for a in due_items(conn, month))
 pending_all = all_inv[all_inv.status.isin(["REVIEW", "SUBMITTED", "READY", "ERROR"])]
 
 if not user.is_admin:   # 사용자는 우리 부서 기준
     lines = lines[lines["부서코드"] == user.cost_center]
 
 
-def task_card(icon: str, title: str, count: int, desc: str, page: str, label: str, color: str):
-    with st.container(border=True, width=230, height="stretch"):
-        st.markdown(f":{color}[{icon}] **{title}**")
-        st.markdown(f"### :{color}[{count}건]" if count else "### 0건")
-        st.caption(desc)
-        st.page_link(page, label=label, icon=":material/arrow_forward:", disabled=count == 0)
-
+# 카드 id → (이동할 화면, 그 화면에서 미리 골라 둘 구분)
+CARD_TARGET = {
+    "approve": ("app_pages/review.py", "review_group_pref", "승인 요청"),
+    "review": ("app_pages/review.py", "review_group_pref", "검토 대기" if user.is_admin else "검토 필요"),
+    "ready": ("app_pages/review.py", "review_group_pref", "전기 대기"),
+    "mine": ("app_pages/review.py", "review_group_pref", "내 승인 요청"),
+    "budget": ("app_pages/budget.py", None, None),
+    "rec": ("app_pages/recurring.py", "check_view", "정기 전표"),
+    "nonrec": ("app_pages/recurring.py", "check_view", "비정기 전표"),
+    "annual": ("app_pages/recurring.py", "check_view", "연간 항목"),
+}
 
 # ---------- 오늘 할 일 ----------
 st.subheader("오늘 할 일", divider="gray", anchor=False)
 if user.is_admin:
     rec_bad = [r for r in rec if r.status in ("OVERDUE", "AMOUNT_DIFF", "NOT_POSTED")]
-    tasks = [
-        (":material/how_to_reg:", "승인 요청", int((pending_all.status == "SUBMITTED").sum()),
-         "사용자가 분개를 고쳐 승인을 기다리는 건", "app_pages/review.py", "승인하러 가기", "violet"),
-        (":material/edit_note:", "검토 대기", int(pending_all.status.isin(["REVIEW", "ERROR"]).sum()),
-         "계정·거래처를 확정해야 하는 건", "app_pages/review.py", "검토하러 가기", "orange"),
-        (":material/publish:", "전기 대기", int((pending_all.status == "READY").sum()),
-         "자동 분류가 끝나 전기만 하면 되는 건", "app_pages/review.py", "일괄 전기", "blue"),
-        (":material/warning:", "예산 경고", sum(b.status in ("OVER", "RISK") for b in bud),
-         "예산 초과 또는 초과가 예상되는 항목", "app_pages/budget.py", "이유 보기", "red"),
-        (":material/event_busy:", "정기 전표 확인", len(rec_bad), "기한 경과·금액 상이·미전기",
-         "app_pages/recurring.py", "점검하러 가기", "red"),
-        (":material/checklist:", "비정기 미확인", nonrec_open, "금액·용도·부서를 눈으로 확인할 건",
-         "app_pages/recurring.py", "확인하러 가기", "blue"),
+    cards = [
+        {"id": "approve", "icon": "🙋", "title": "승인 요청", "tone": "violet", "go": "승인하러 가기",
+         "count": int((pending_all.status == "SUBMITTED").sum()), "desc": "사용자가 분개를 고쳐 승인을 기다리는 건"},
+        {"id": "review", "icon": "📝", "title": "검토 대기", "tone": "orange", "go": "검토하러 가기",
+         "count": int(pending_all.status.isin(["REVIEW", "ERROR"]).sum()), "desc": "계정·거래처를 확정해야 하는 건"},
+        {"id": "ready", "icon": "📤", "title": "전기 대기", "tone": "blue", "go": "일괄 전기",
+         "count": int((pending_all.status == "READY").sum()), "desc": "자동 분류가 끝나 전기만 하면 되는 건"},
+        {"id": "budget", "icon": "⚠️", "title": "예산 경고", "tone": "red", "go": "이유 보기",
+         "count": sum(b.status in ("OVER", "RISK") for b in bud), "desc": "예산 초과 또는 초과가 예상되는 항목"},
+        {"id": "rec", "icon": "🔁", "title": "정기 전표 확인", "tone": "red", "go": "점검하러 가기",
+         "count": len(rec_bad), "desc": "기한 경과·금액 상이·미전기"},
+        {"id": "nonrec", "icon": "🔎", "title": "비정기 미확인", "tone": "blue", "go": "확인하러 가기",
+         "count": nonrec_open, "desc": "금액·용도·부서를 눈으로 확인할 건"},
+        {"id": "annual", "icon": "🗓️", "title": "연간 항목", "tone": "violet", "go": "체크하러 가기",
+         "count": annual_open, "desc": "이번 달 처리할 세금·보험·점검 (재산세 등)"},
     ]
 else:
-    tasks = [
-        (":material/edit_note:", "검토 필요", int(pending_all.status.isin(["REVIEW", "ERROR"]).sum()),
-         "계정·부서를 몰라 사람 확인이 필요한 건", "app_pages/review.py", "확인하러 가기", "orange"),
-        (":material/hourglass_top:", "내 승인 요청", int((pending_all.submitted_by == user.user_id).sum()),
-         "관리자 승인을 기다리는 중", "app_pages/review.py", "진행 상황 보기", "violet"),
+    cards = [
+        {"id": "review", "icon": "📝", "title": "검토 필요", "tone": "orange", "go": "확인하러 가기",
+         "count": int(pending_all.status.isin(["REVIEW", "ERROR"]).sum()), "desc": "계정·부서를 몰라 사람 확인이 필요한 건"},
+        {"id": "mine", "icon": "⏳", "title": "내 승인 요청", "tone": "violet", "go": "진행 상황 보기",
+         "count": int((pending_all.submitted_by == user.user_id).sum()), "desc": "관리자 승인을 기다리는 중"},
     ]
 
-if sum(t[2] for t in tasks) == 0:
+if sum(c["count"] for c in cards) == 0:
     st.success("지금은 처리할 일이 없어요. 새 세금계산서가 오면 여기에 알려드릴게요. 🎉")
-with st.container(horizontal=True):
-    for t in tasks:
-        task_card(*t)
+clicked = task_cards(cards, key="task_cards")
+if clicked in CARD_TARGET:
+    page, state_key, value = CARD_TARGET[clicked]
+    if state_key:
+        st.session_state[state_key] = value
+    st.switch_page(page)
 
 # ---------- 핵심 지표 ----------
 # ---------- 예산 경고 (관리자) ----------
@@ -94,6 +107,41 @@ if user.is_admin:
     if alerts:
         st.page_link("app_pages/budget.py", label=f"예산 경고 {len(alerts)}건 전체 이유 보기",
                      icon=":material/arrow_forward:")
+
+# ---------- 작년보다 늘어난 비용 · 달력 (관리자) ----------
+if user.is_admin:
+    st.subheader("작년보다 늘어난 비용", divider="gray", anchor=False,
+                 help="총무 예산 계정만 · 작년 같은 기간(같은 날짜까지)과 비교 · 원인은 증가분이 큰 정기 전표/공급자/연간 항목")
+    scope = st.segmented_control("비교 기간", ["이번 달", "올해 누적"], default="이번 달", required=True,
+                                 key="yoy_scope", label_visibility="collapsed")
+    with connect() as conn:
+        yoy, tot_now, tot_ly = yoy_increase(conn, month, scope="month" if scope == "이번 달" else "ytd")
+    period = "이번 달 1일~오늘" if scope == "이번 달" else "올해 1월 1일~오늘"
+    st.caption(f"{period} {short_won(tot_now)} · 작년 같은 기간 {short_won(tot_ly)} "
+               f"({'+' if tot_now >= tot_ly else ''}{short_won(tot_now - tot_ly)})")
+    if yoy.empty:
+        st.success("작년 같은 기간보다 늘어난 계정이 없어요.")
+    else:
+        st.dataframe(
+            yoy, hide_index=True, alt="작년 대비 늘어난 비용과 원인",
+            column_config={
+                "올해": st.column_config.NumberColumn(format="localized"),
+                "작년": st.column_config.NumberColumn(format="localized"),
+                "증가": st.column_config.NumberColumn("증가액", format="localized"),
+                "증가율": st.column_config.NumberColumn(format="percent"),
+                "원인": st.column_config.TextColumn("무엇 때문에 늘었나", width="large"),
+            },
+        )
+
+    with st.expander("📅 이번 달 달력 — 정기 전표 기한 · 연간 항목 · 작년 이 시기 지출 · 세무 일정", expanded=True):
+        with connect() as conn:
+            events = month_events(conn, month)
+            nxt = next_month_annual(conn, month)
+        y_, m_ = map(int, month.split("-"))
+        month_calendar(y_, m_, date.today().isoformat(), events, key=f"cal_{month}")
+        if nxt:
+            st.caption("다음 달 연간 항목 미리 보기: " + " · ".join(
+                f"{a.name} ({a.due_date[5:].replace('-', '/')}, 예상 {short_won(a.expected_amount)})" for a in nxt))
 
 st.subheader("총무 예산 항목 · 이번 달" if user.is_admin else f"{user.cost_center_name} · 총무 예산 항목 이번 달",
              divider="gray", anchor=False,

@@ -15,7 +15,10 @@ MASTERS = {
     "recurring_vouchers": ("정기 전표", "매월 발행 여부를 점검할 항목입니다. 같은 공급자에 여러 건이면 키워드로 구분하세요.", {
         "id": None, "name": "항목명", "supplier_bizno": "공급자 사업자번호", "keyword": "품목 키워드",
         "expected_amount": "예상 합계금액", "tolerance_pct": "허용오차(%)", "due_day": "기한(일)",
-        "owner": "담당", "gl_account": "예산 계정", "active": "사용"}),
+        "owner": "담당", "gl_account": "예산 계정", "start_month": "시작월(YYYY-MM)", "active": "사용"}),
+    "annual_items": ("연간 항목", "매년 같은 시기에 처리할 세금·보험·점검입니다. 처리 월은 쉼표로 구분 (예: 6,12).", {
+        "id": None, "name": "항목명", "months": "처리 월", "due_day": "기한(일)", "gl_account": "예산 계정",
+        "expected_amount": "예상 금액", "category": "분류", "note": "메모", "active": "사용"}),
     "account_rules": ("계정 규칙", "priority 가 작은 규칙부터 적용합니다. 공급자·키워드 중 하나는 반드시 지정하세요.", {
         "id": None, "priority": "우선순위", "supplier_bizno": "공급자 사업자번호", "keyword": "품목 키워드",
         "gl_account": "G/L 계정", "cost_center": "코스트센터", "alloc_key": "배부기준",
@@ -63,6 +66,9 @@ for tab, (name, (label, desc, cols)) in zip(tabs, MASTERS.items()):
                         idx = cols_.index("id")
                         keep_ids = [r[idx] for r in rows_ if r[idx] is not None]
                         gone = f"id NOT IN ({','.join('?' * len(keep_ids))})" if keep_ids else "1=1"
+                        if name == "annual_items":
+                            conn.execute(f"DELETE FROM annual_checks WHERE item_id IN "
+                                         f"(SELECT id FROM annual_items WHERE {gone})", keep_ids)
                         if name == "recurring_vouchers":
                             conn.execute(f"DELETE FROM recurring_checks WHERE recurring_id IN "
                                          f"(SELECT id FROM recurring_vouchers WHERE {gone})", keep_ids)
