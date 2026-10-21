@@ -222,6 +222,104 @@ def _answer_template(tool: str, data: dict, args: dict) -> str:
                                                                    for r in over) if over else ""))
 
 
+def _mo(m: str) -> str:
+    y, mm = m.split("-")
+    return f"{int(mm)}월"
+
+
+def _j(word: str, pair: str) -> str:
+    """받침에 맞는 조사: _j('임차료', '은는') → '임차료는'."""
+    ch = next((c for c in reversed(word) if c.strip() and c not in ")]'\""), "")
+    jong = (ord(ch) - 0xAC00) % 28 if "가" <= ch <= "힣" else 0
+    if pair == "으로":
+        return word + ("으로" if jong and jong != 8 else "로")
+    return word + (pair[0] if jong else pair[1])
+
+
+def _clean(r: str) -> str:
+    return r.replace("**", "").rstrip(".").strip()
+
+
+def _example_answer(tool: str, data: dict, args: dict) -> str:
+    """로컬 AI 미연결 시 '예시 답안' — 같은 근거 데이터로, AI 가 답할 법한 말투의 문장으로 만든다."""
+    if "error" in data:
+        return data["error"]
+    mo = _mo(args.get("month", "2026-10"))
+    if tool == "account_detail":
+        a, b, u, f = data["account"], data["budget"], data["actual"], data["forecast"]
+        if data["status"] == "초과":
+            s1 = f"{mo} {_j(a, '은는')} 이미 예산 {_j(short_won(b), '을를')} {short_won(u - b)} 넘었습니다(지금까지 {short_won(u)} 사용)."
+        elif data["status"] in ("초과 예상", "주의"):
+            s1 = f"{mo} {_j(a, '은는')} 아직 예산 안이지만, 월말에는 {_j(short_won(f), '으로')} 예산 {short_won(b)}의 {f / b:.0%}가 예상됩니다."
+        else:
+            s1 = f"{mo} {_j(a, '은는')} 예산 {short_won(b)} 중 {_j(short_won(u), '을를')} 써서 정상 범위입니다."
+        why = [_clean(r) for r in data["reasons"] if not r.startswith(("이미 예산을", "월말 예상"))][:2]
+        s2 = (f" 원인은 {'두 가지' if len(why) > 1 else '이렇습니다'}입니다. " if len(why) > 1 else " 원인은 ")
+        s2 = (s2 + " ".join(f"{'①②'[i]} {w}." for i, w in enumerate(why))) if len(why) > 1 else (
+            f" 원인은 {why[0]}입니다." if why else "")
+        s3 = (f" 이대로면 월말 {short_won(f)}(예산의 {f / b:.0%})이 예상되니 남은 기간 지출을 점검해 보시길 권합니다."
+              if b and f > b else " 지금 속도라면 예산 안에서 마감할 것으로 보입니다.")
+        return s1 + s2 + s3
+    if tool == "yoy":
+        rows, now_, ly = data["rows"], data["this_year"], data["last_year"]
+        period = "올해 1월부터 오늘까지" if args.get("scope") == "ytd" else f"{mo} 1일부터 오늘까지"
+        diff = now_ - ly
+        s1 = (f"{period} 총무 비용은 {_j(short_won(now_), '으로')} 작년 같은 기간보다 "
+              f"{short_won(abs(diff))} {'많습니다' if diff >= 0 else '적습니다'}.")
+        if not rows:
+            return s1 + " 작년보다 늘어난 계정은 없습니다."
+        top = rows[0]
+        s2 = (f" 가장 많이 늘어난 계정은 {_j(top['계정'], '으로')} {short_won(top['증가'])} 늘었고, 원인은 "
+              f"{top['원인'].split(' · ')[0]}입니다.")
+        s3 = (" 그다음은 " + ", ".join(f"{r['계정']}(+{short_won(r['증가'])})" for r in rows[1:3]) + "입니다."
+              if len(rows) > 1 else "")
+        return s1 + s2 + s3
+    if tool == "recurring_status":
+        items = data["items"]
+        ok = [i for i in items if i["상태"] in ("전기 완료", "수동 확인", "이번 달 해당 없음")]
+        late = [i for i in items if i["상태"] == "기한 경과"]
+        diff = [i for i in items if i["상태"] == "금액 상이"]
+        wait = [i for i in items if i["상태"] in ("수신 대기",)]
+        unposted = [i for i in items if i["상태"] == "수신·미전기"]
+        text = f"{mo} 정기 전표 {len(items)}건 중 {len(ok)}건이 처리됐습니다."
+        if late:
+            text += (" " + _j(", ".join(f"{i['항목']}(기한 {i['기한'][5:].replace('-', '/')})" for i in late), "은는")
+                     + " 기한이 지났는데 아직 들어오지 않았으니 공급자에게 발행을 요청하세요.")
+        if diff:
+            text += " " + _j(", ".join(i["항목"] for i in diff), "은는") + " 예상 금액과 달라 사유 확인이 필요합니다."
+        if unposted:
+            text += " " + _j(", ".join(i["항목"] for i in unposted), "은는") + " 계산서는 들어왔으니 검토·전기에서 전기하면 됩니다."
+        if wait:
+            text += f" 나머지 {len(wait)}건은 기한 전이라 기다리면 됩니다."
+        return text
+    if tool == "annual_status":
+        rows = data["this_month"]
+        if not rows:
+            text = f"{mo}에는 처리할 연간 항목이 없습니다."
+        else:
+            parts = [f"{r['항목']}({r['상태']}" + (f", {short_won(r['처리 금액'])}" if r.get("처리 금액") else
+                                                f", 예상 {short_won(r['예상'])}") + ")" for r in rows]
+            text = f"{mo} 연간 항목은 " + ", ".join(parts) + "입니다."
+            if any(r["상태"] != "처리 완료" for r in rows):
+                text += " 아직 처리하지 않은 항목은 납부 후 전표 점검 › 연간 항목에서 체크해 주세요."
+        if data["next_month"]:
+            text += " 다음 달에는 " + _j(", ".join(r["항목"] for r in data["next_month"]), "이가") + " 있습니다."
+        return text
+    acc = data["accounts"]
+    over = [r for r in acc if r["상태"] == "초과"]
+    risk = [r for r in acc if r["상태"] == "초과 예상"]
+    b, f = data["budget"], data["forecast"]
+    text = (f"{mo} 총무 예산 {short_won(b)} 중 {_j(short_won(data['actual']), '을를')} 썼고, 월말에는 {short_won(f)}"
+            f"(예산의 {f / b:.0%})이 예상됩니다." if b else f"{mo} 총무 예산이 편성되지 않았습니다.")
+    if over:
+        worst = max(over, key=lambda r: r["사용"] - r["예산"])
+        text += (f" 초과 {len(over)}건 중 가장 큰 건은 {worst['계정']}"
+                 f"(예산보다 {short_won(worst['사용'] - worst['예산'])} 초과)입니다.")
+    if risk:
+        text += " 초과가 예상되는 계정은 " + ", ".join(r["계정"] for r in risk) + "입니다."
+    return text
+
+
 def ask(conn: sqlite3.Connection, question: str, base_month: str, today: date | None = None) -> Answer:
     accounts = [r[0] for r in conn.execute("SELECT name FROM gl_accounts WHERE owner='총무'")]
     tool, args = route_rule(question, base_month, accounts)
@@ -242,7 +340,7 @@ def ask(conn: sqlite3.Connection, question: str, base_month: str, today: date | 
         except ai.AIUnavailable:
             pass
     data, table = run_tool(conn, tool, args, today)
-    text = _answer_template(tool, data, args)
+    text = _example_answer(tool, data, args)       # 로컬 AI 미연결: 예시 답안
     if source == "ai":
         prompt = ("아래 조회 결과(JSON)만 근거로 질문에 한국어로 2~4문장 답하세요. 숫자는 결과에 있는 값만 쓰고, "
                   "금액은 '억·만원'으로. 결과에 없으면 모른다고 하세요.\n\n"
@@ -251,7 +349,9 @@ def ask(conn: sqlite3.Connection, question: str, base_month: str, today: date | 
         try:
             text = ai.chat([{"role": "user", "content": prompt}], temperature=0.1)
         except ai.AIUnavailable:
-            source = "rule"
+            source = "example"
+    else:
+        source = "example"
     conn.execute("INSERT INTO ai_log(feature, month, source, input_json, output_json, created_at) VALUES "
                  "('qa',?,?,?,?,?)", (args.get("month"), source,
                                       json.dumps({"q": question, "tool": tool, "args": args}, ensure_ascii=False),

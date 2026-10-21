@@ -30,8 +30,20 @@ with st.container(horizontal=True, vertical_alignment="center"):
         st.rerun()
 if not stt.available:
     st.caption("로컬 AI가 없어도 모든 기능은 **규칙·과거 기록 방식**으로 동작합니다. 내 PC에서 Ollama를 켜고 "
-               f"`ollama pull {ai.MODEL}` 한 뒤 '연결 다시 확인'을 누르면 AI가 문장·추천·문서 읽기를 맡습니다. "
-               "회사 데이터는 내 PC 밖으로 나가지 않습니다.")
+               f"`ollama pull {ai.MODEL}` 한 뒤 '연결 다시 확인'을 누르면 AI가 문장·추천·문서 읽기를 맡습니다.")
+with st.expander("데이터 보안 정책 — 로컬 AI가 아니면 연동하지 않습니다", icon=":material/shield_lock:"):
+    st.markdown(f"""**{ai.POLICY}**
+
+AI에 넘기는 내용은 공급자·금액·계정·부서 같은 **회사 재무 데이터**라서, 외부로 나가면 유출 위험이 있습니다.
+흔히 쓰는 방법은 두 가지입니다.
+
+| 방법 | 내용 | 이 프로그램 |
+|---|---|---|
+| ① 로컬 모델 | 사내 PC·사내 서버에서 돌리는 모델 (자산관리 AI처럼 Ollama) | **사용** |
+| ② 기업용 API | 데이터를 학습에 쓰지 않는 기업용 클라우드 API + 사업자번호 등은 가리고 전송 | **사용 안 함** |
+
+②도 가리기·계약으로 위험을 줄일 수는 있지만 데이터가 회사 밖 서버로 나가는 것은 같으므로, 이 프로그램은 **①만** 씁니다.
+`OLLAMA_URL`에 외부 주소를 넣어도 연결하지 않고(`localhost`·사내망 주소만 허용) 규칙 방식으로 동작합니다.""")
 
 st.session_state.setdefault("ai_view", "총무 브리핑")
 with connect() as conn:
@@ -39,7 +51,8 @@ with connect() as conn:
 view = st.segmented_control("보기", ["총무 브리핑", "질문하기", "문서 읽기", "이상 신호", "추천 정확도"],
                             required=True, key="ai_view", label_visibility="collapsed",
                             format_func=lambda v: f"이상 신호 {len(anomalies)}" if v == "이상 신호" else v)
-SRC = {"ai": "🤖 로컬 AI가 작성", "rule": "📐 규칙 방식(문장 틀)으로 작성"}
+SRC = {"ai": "🤖 로컬 AI가 작성", "rule": "📐 규칙 방식(문장 틀)으로 작성",
+       "example": "📝 예시 답안 · 로컬 AI 미연결"}
 
 # ============================================================ 총무 브리핑 ====
 if view == "총무 브리핑":
@@ -76,6 +89,10 @@ elif view == "질문하기":
             with connect() as conn:
                 ans = ask(conn, q.strip(), month)
         with st.container(border=True):
+            if ans.source == "example":
+                st.markdown("**📝 예시 답안**")
+                st.caption("로컬 AI가 연결되지 않아 **예시 답안**을 보여 드립니다. 숫자는 실제 데이터로 계산했고, "
+                           "로컬 AI가 연결되면 이런 형태로 AI가 직접 답합니다. (보안 정책상 외부 AI는 쓰지 않습니다)")
             st.markdown(ans.text)
             st.caption(f"{SRC.get(ans.source, ans.source)} · 사용한 조회: `{ans.tool}` "
                        + " ".join(f"{k}={v}" for k, v in ans.args.items() if v))

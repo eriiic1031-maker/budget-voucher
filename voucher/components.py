@@ -2,7 +2,8 @@
 
 - task_cards : 카드 전체를 눌러 해당 화면으로 이동하는 '오늘 할 일' 카드
 - month_calendar : 날짜를 누르면 그날 일정이 아래에 펼쳐지는 월 달력
-둘 다 --st-* 테마 변수를 써서 라이트/다크 테마를 따라간다.
+- pdf_print_buttons : 보고서 PDF 를 바로 인쇄하거나 새 탭에서 여는 버튼
+모두 --st-* 테마 변수를 써서 라이트/다크 테마를 따라간다.
 """
 from __future__ import annotations
 
@@ -179,3 +180,61 @@ _CAL = st.components.v2.component("month_calendar", html='<div class="wrap"></di
 def month_calendar(year: int, month: int, today: str, days: dict[int, list[dict]], *, key: str) -> None:
     """days: {일: [{type, short, label, detail}]} — type: rec / annual / ly / tax / holiday"""
     _CAL(data={"year": year, "month": month, "today": today, "days": {str(k): v for k, v in days.items()}}, key=key)
+
+
+# ------------------------------------------------------------------ PDF 인쇄 ----
+_PRINT_CSS = """
+.row { display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--st-font); }
+button {
+  all: unset; box-sizing: border-box; cursor: pointer; padding: 6px 14px; min-height: 40px;
+  display: inline-flex; align-items: center; gap: 6px; font-size: .95rem;
+  color: var(--st-text-color); background: var(--st-background-color);
+  border: 1px solid var(--st-border-color); border-radius: var(--st-button-radius, var(--st-base-radius));
+}
+button:hover { border-color: var(--st-primary-color); color: var(--st-primary-color); }
+button:focus-visible { outline: 2px solid var(--st-primary-color); outline-offset: 2px; }
+.msg { font-size: .78rem; color: var(--st-gray-color); align-self: center; }
+"""
+
+_PRINT_JS = """
+function blobUrl(b64) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }))
+}
+
+export default function (component) {
+  const { data, parentElement } = component
+  const root = parentElement.querySelector(".row")
+  if (!root || !data) return
+  root.innerHTML = '<button type="button" class="print">🖨️ 인쇄</button>' +
+                   '<button type="button" class="open">↗ 새 탭에서 열기</button><span class="msg"></span>'
+  const msg = root.querySelector(".msg")
+  root.querySelector(".print").onclick = () => {
+    const url = blobUrl(data.pdf)
+    const old = document.getElementById("report-print-frame")
+    if (old) old.remove()
+    const f = document.createElement("iframe")
+    f.id = "report-print-frame"
+    f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden"
+    f.onload = () => setTimeout(() => {
+      try { f.contentWindow.focus(); f.contentWindow.print() }
+      catch (e) { window.open(url, "_blank"); msg.textContent = "새 탭에서 Ctrl+P로 인쇄하세요." }
+    }, 400)
+    f.src = url
+    document.body.appendChild(f)
+  }
+  root.querySelector(".open").onclick = () => {
+    window.open(blobUrl(data.pdf), "_blank")
+    msg.textContent = "새 탭의 PDF 화면에서 인쇄(Ctrl+P)할 수 있습니다."
+  }
+}
+"""
+
+_PRINT = st.components.v2.component("pdf_print", html='<div class="row"></div>', css=_PRINT_CSS, js=_PRINT_JS)
+
+
+def pdf_print_buttons(pdf: bytes, *, key: str) -> None:
+    """브라우저 인쇄 창을 바로 여는 '인쇄' 버튼 + PDF 를 새 탭에서 여는 버튼."""
+    import base64
+    _PRINT(data={"pdf": base64.b64encode(pdf).decode()}, key=key)

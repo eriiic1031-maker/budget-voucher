@@ -64,7 +64,8 @@ st.session_state.actor = user.user_id
 common = [
     st.Page("app_pages/dashboard.py", title="대시보드", icon=":material/space_dashboard:", default=True),
     *([st.Page("app_pages/budget.py", title="총무 예산", icon=":material/savings:"),
-       st.Page("app_pages/ai_helper.py", title="AI 도우미", icon=":material/smart_toy:")] if user.is_admin else []),
+       st.Page("app_pages/ai_helper.py", title="AI 도우미", icon=":material/smart_toy:"),
+       st.Page("app_pages/report.py", title="보고서", icon=":material/summarize:")] if user.is_admin else []),
     st.Page("app_pages/recurring.py", title="전표 점검", icon=":material/event_repeat:"),
     st.Page("app_pages/review.py", title="검토·전기" if user.is_admin else "검토·승인 요청",
             icon=":material/rule:"),

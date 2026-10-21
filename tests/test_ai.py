@@ -83,7 +83,27 @@ def test_ai_failure_falls_back(conn, monkeypatch):
     text, src = briefing(conn, "2026-10", date(2026, 10, 21))
     assert src == "rule" and "총무 예산 브리핑" in text
     a = ask(conn, "이번 달 연간 항목 뭐 있어?", "2026-10", date(2026, 10, 21))
-    assert a.source == "rule" and a.tool == "annual_status" and "전기 정기 안전점검" in a.text
+    assert a.source == "example" and a.tool == "annual_status" and "전기 정기 안전점검" in a.text
+
+
+def test_example_answer_when_ai_off(conn, monkeypatch):
+    """로컬 AI 미연결: 실제 데이터로 계산한 '예시 답안'을 대화체로 준다."""
+    monkeypatch.setattr(ai, "status", lambda refresh=False: ai.Status(False, "fake", "꺼짐"))
+    a = ask(conn, "이번 달 연간 항목 뭐 있어?", "2026-10", date(2026, 10, 21))
+    assert a.source == "example" and a.text.startswith("10월 연간 항목은") and "입니다" in a.text
+
+
+def test_only_local_ai_allowed(monkeypatch):
+    """보안 정책: 로컬·사내망 주소만 연결, 외부 AI 주소는 차단."""
+    for url in ("http://localhost:11434", "http://127.0.0.1:11434", "http://192.168.0.10:11434",
+                "http://10.1.2.3:11434", "http://gpu.internal:11434"):
+        assert ai.is_local_address(url), url
+    for url in ("https://api.openai.com", "https://api.anthropic.com", "http://8.8.8.8:11434"):
+        assert not ai.is_local_address(url), url
+    monkeypatch.setattr(ai, "OLLAMA_URL", "https://api.openai.com")
+    monkeypatch.setattr(ai, "AI_MODE", "auto", raising=False)
+    st = ai.status(refresh=True)
+    assert not st.available and "보안" in st.reason
 
 
 def test_question_routing_rules():
